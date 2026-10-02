@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BMW M4 — The Art of Power</title>
+  <meta name="description" content="Unofficial BMW M4 fan concept experience. Not affiliated with BMW AG." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <!-- Loading screen -->
+  <div id="loader">
+    <div class="loader-content">
+      <div class="loader-logo">M4</div>
+      <div class="loader-bar-wrap">
+        <div class="loader-bar"><div class="loader-fill" id="loader-fill"></div></div>
+        <span class="loader-pct" id="loader-pct">0%</span>
+      </div>
+      <div class="loader-label" id="loader-label">Loading experience…</div>
+    </div>
+  </div>
+
+  <!-- Entry screen -->
+  <div id="entry-screen">
+    <div class="entry-content">
+      <div class="entry-logo">M4</div>
+      <h1 class="entry-title" data-en="THE ART OF POWER" data-ar="فن القوة">THE ART OF POWER</h1>
+      <p class="entry-sub" data-en="BMW M4 — Unofficial Fan Concept" data-ar="بي إم دبليو M4 — تصميم تجريبي غير رسمي">BMW M4 — Unofficial Fan Concept</p>
+      <div class="entry-btns">
+        <button class="btn-primary" id="btn-sound">
+          <span class="btn-icon">♪</span>
+          <span data-en="Enter with Sound" data-ar="الدخول مع الصوت">Enter with Sound</span>
+        </button>
+        <button class="btn-ghost" id="btn-no-sound">
+          <span data-en="Enter without Sound" data-ar="الدخول بدون صوت">Enter without Sound</span>
+        </button>
+      </div>
+    </div>
+    <div class="entry-grain"></div>
+  </div>
+
+  <!-- Main experience -->
+  <div id="experience" class="hidden">
+    <!-- Fixed canvas -->
+    <canvas id="main-canvas"></canvas>
+
+    <!-- Film grain overlay -->
+    <div id="grain-overlay"></div>
+
+    <!-- Amber progress line -->
+    <div id="progress-line"></div>
+
+    <!-- Language toggle -->
+    <div id="lang-toggle">
+      <button id="btn-lang" aria-label="Toggle language">
+        <span id="lang-label">AR</span>
+      </button>
+    </div>
+
+    <!-- Sound toggle -->
+    <div id="sound-toggle">
+      <button id="btn-mute" aria-label="Toggle sound">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path id="sound-icon-path" d="M11 5L6 9H2v6h4l5 4V5z"/>
+          <path id="sound-waves" d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Scroll container — defines the total 900vh scroll height -->
+    <div id="scroll-container">
+
+      <!-- Section 1: Headlights on -->
+      <section class="scene" id="scene-1" data-scene="1">
+        <div class="scene-text center-text">
+          <h1 class="scene-title" data-en="THE ART OF POWER" data-ar="فن القوة">THE ART OF POWER</h1>
+          <p class="scene-sub" data-en="BMW M4 — Unofficial Fan Concept" data-ar="بي إم دبليو M4 — تصميم تجريبي غير رسمي">BMW M4 — Unofficial Fan Concept</p>
+          <div class="scroll-hint">
+            <div class="scroll-arrow"></div>
+            <span data-en="Scroll to discover" data-ar="مرر للاكتشاف">Scroll to discover</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Teardown -->
+      <section class="scene" id="scene-2" data-scene="2">
+        <div class="scene-text left-text glass-card">
+          <div class="card-accent"></div>
+          <h2 class="scene-heading" data-en="DECONSTRUCTED" data-ar="مُفكَّك بدقة">DECONSTRUCTED</h2>
+          <p class="scene-body" data-en="Every component engineered with obsessive precision. 503 horsepower waiting to be unleashed." data-ar="كل جزء مُهندَس بدقة استثنائية. 503 حصان في انتظار الانطلاق الملحمي.">Every component engineered with obsessive precision. 503 horsepower waiting to be unleashed.</p>
+        </div>
+      </section>
+
+      <!-- Section 3: Engine dive -->
+      <section class="scene" id="scene-3" data-scene="3">
+        <div class="scene-text right-text glass-card">
+          <div class="card-accent"></div>
+          <h2 class="scene-heading" data-en="THE HEART" data-ar="القلب النابض">THE HEART</h2>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-num mono" data-target="503" data-suffix=" HP">0</span>
+              <span class="stat-label" data-en="Horsepower" data-ar="حصان">Horsepower</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-num mono" data-target="650" data-suffix=" Nm">0</span>
+              <span class="stat-label" data-en="Torque" data-ar="عزم الدوران">Torque</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-num mono" data-target="35" data-suffix="s" data-decimal="1">0</span>
+              <span class="stat-label" data-en="0–100 km/h" data-ar="0–100 كم/س">0–100 km/h</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-num mono tag">S58</span>
+              <span class="stat-label" data-en="Twin-Turbo Inline-6" data-ar="ست أسطوانات بشاحنين توربينيين">Twin-Turbo Inline-6</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4 (Reverse / Reassembly): virtual, uses s3+s2 reversed -->
+      <section class="scene" id="scene-r" data-scene="reverse">
+        <div class="scene-text center-text glass-card" style="max-width:560px;">
+          <div class="card-accent"></div>
+          <h2 class="scene-heading" data-en="ENGINEERED TO COME BACK TOGETHER" data-ar="مُهندَس ليعود إلى الحياة">ENGINEERED TO COME BACK TOGETHER</h2>
+          <p class="scene-body" data-en="Perfection is not chance. It is deliberate, repeatable, relentless." data-ar="الكمال ليس محض صدفة، بل هو تصميم متعمد، قابل للتكرار، وبلا هوادة.">Perfection is not chance. It is deliberate, repeatable, relentless.</p>
+        </div>
+      </section>
+
+      <!-- Section 5: s4 Headlight close-up -->
+      <section class="scene" id="scene-4" data-scene="4">
+        <div class="scene-text right-text glass-card">
+          <div class="card-accent"></div>
+          <div class="card-tag" data-en="DESIGN" data-ar="التصميم">DESIGN</div>
+          <h2 class="scene-heading" data-en="LIGHT AS LANGUAGE" data-ar="الضوء كلغة حوار">LIGHT AS LANGUAGE</h2>
+          <p class="scene-body" data-en="Adaptive LED halos that don't just illuminate — they announce your arrival." data-ar="مصابيح LED تكيفية فائقة الذكاء لا تضيء الطريق فحسب — بل تفرض هيبتك.">Adaptive LED halos that don't just illuminate — they announce your arrival.</p>
+        </div>
+      </section>
+
+      <!-- Section 6: s5 Grille -->
+      <section class="scene" id="scene-5" data-scene="5">
+        <div class="scene-text left-text glass-card">
+          <div class="card-accent"></div>
+          <div class="card-tag" data-en="PRESENCE" data-ar="الهيبة والحضور">PRESENCE</div>
+          <h2 class="scene-heading" data-en="COMMANDING PRESENCE" data-ar="حضور آمر">COMMANDING PRESENCE</h2>
+          <p class="scene-body" data-en="The iconic kidney grille reimagined at M scale. Wider. Bolder. Unmistakable." data-ar="شبكة الكلية الأيقونية بأبعاد M الرياضية. أوسع وأجرأ بحضور لا يُخطئه أحد.">The iconic kidney grille reimagined at M scale. Wider. Bolder. Unmistakable.</p>
+        </div>
+      </section>
+
+      <!-- Section 7: s6 Side profile -->
+      <section class="scene" id="scene-6" data-scene="6">
+        <div class="scene-text right-text glass-card">
+          <div class="card-accent"></div>
+          <div class="card-tag" data-en="AERODYNAMICS &amp; HANDLING" data-ar="الديناميكا الهوائية والتحكم">AERODYNAMICS &amp; HANDLING</div>
+          <h2 class="scene-heading" data-en="SHAPE OF SPEED" data-ar="شكل السرعة">SHAPE OF SPEED</h2>
+          <p class="scene-body" data-en="Every crease, every vent, every surface — shaped by airflow data and proven on track." data-ar="كل انحناءة وفتحة تهوية وسطح تم صقلها بتدفق الهواء وتجربتها على حلبات السباق.">Every crease, every vent, every surface — shaped by airflow data and proven on track.</p>
+        </div>
+      </section>
+
+      <!-- Section 8: s7 Launch + CTA -->
+      <section class="scene" id="scene-7" data-scene="7">
+        <div class="scene-text center-text">
+          <h2 class="scene-title launch-title" data-en="PURE LAUNCH" data-ar="انطلاق خالص">PURE LAUNCH</h2>
+          <p class="scene-sub" data-en="0 to 100 km/h. 3.5 seconds. No hesitation." data-ar="من 0 إلى 100 كم/س في 3.5 ثانية. بلا أدنى تردد.">0 to 100 km/h. 3.5 seconds. No hesitation.</p>
+          <div class="cta-group">
+            <a href="#" class="cta-btn" data-en="Configure Your M4" data-ar="صمّم سيارتك M4">Configure Your M4</a>
+            <a href="#" class="cta-link" data-en="Learn more →" data-ar="اعرف المزيد ←">Learn more →</a>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /scroll-container -->
+
+    <!-- Footer -->
+    <footer id="site-footer">
+      <p data-en="Unofficial fan concept, not affiliated with BMW." data-ar="تصميم تجريبي غير رسمي من المعجبين، غير تابع لشركة BMW.">
+        Unofficial fan concept, not affiliated with BMW.
+      </p>
+    </footer>
+
+  </div><!-- /experience -->
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
