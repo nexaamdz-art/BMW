@@ -149,24 +149,17 @@ export class ProgressiveLoader {
   }
 
   /**
-   * Preload strided keyframes across all sequences [2..7] in the background.
-   * Scene 7 gets an initial stride-4 pass for denser coverage since it loads last.
-   * Takes only ~200 requests and provides seamless coverage across the entire site.
+   * Preload strided keyframes across scenes 2–6 in the background.
+   * (Scene 1 and scene 7 are fully loaded during the initial loader.)
    */
   async preloadAllKeyframes(stride = 8, concurrency = 16) {
     const tasks = [];
-
-    // s7 gets a finer stride pass first (stride 4) so it has dense coverage ASAP
-    const s7count = this.frameCounts[7] || 192;
-    for (let f = 1; f <= s7count; f += 4) tasks.push({ s: 7, f });
-
     for (let s = 2; s <= 6; s++) {
       const count = this.frameCounts[s] || 192;
       for (let f = 1; f <= count; f += stride) {
         tasks.push({ s, f });
       }
     }
-
     for (let i = 0; i < tasks.length; i += concurrency) {
       const batch = tasks.slice(i, i + concurrency);
       await Promise.all(batch.map(t => this.loadFrame(t.s, t.f)));

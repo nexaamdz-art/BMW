@@ -86,32 +86,37 @@ async function boot() {
   audio     = new AudioManager();
   i18n      = new I18n();
 
-  // Load s1 and display immediately — canvas is already rendering
+  // Load s1 (first scene) + s7 (last scene) in PARALLEL during the loader.
+  // s7 is guaranteed to be 100% in cache before the experience starts.
+  // Since they run simultaneously, load time ≈ max(s1_time, s7_time) — no penalty.
   $loaderLbl.textContent = 'Loading experience…';
   let loaded = 0;
-  const s1Total = frameCounts[1];
+  const s1Total = frameCounts[1] || 192;
+  const s7Total = frameCounts[7] || 192;
+  const loaderTotal = s1Total + s7Total;   // ~384 frames total
 
-  await loaderObj.loadSection(1, () => {
+  const onLoad = () => {
     loaded++;
-    const pct = Math.min(100, Math.round(loaded / s1Total * 100));
+    const pct = Math.min(100, Math.round(loaded / loaderTotal * 100));
     $loaderBar.style.width = pct + '%';
     $loaderPct.textContent = pct + '%';
-  });
+  };
 
-  // Show first frame (canvas is visible — no flash)
+  await Promise.all([
+    loaderObj.loadSection(1, onLoad, 12),
+    loaderObj.loadSection(7, onLoad, 12),
+  ]);
+
+  // Show first frame — canvas is already visible behind loader
   const f1 = loaderObj.getFrame(1, 1, true);
   if (f1) renderer.setFrame(f1);
 
-  // Preload anchor frames + sparse keyframes for ALL scenes (stride 16)
-  // This ensures every scene has at least ~12 frames before the user can scroll there
+  // Preload anchor frames + stride-8 keyframes for all remaining scenes (2–6)
   $loaderLbl.textContent = 'Preparing scenes…';
   await loaderObj.preloadAnchorFrames();
-  await loaderObj.preloadAllKeyframes(16, 20);   // ~75 frames, ~200ms
+  await loaderObj.preloadAllKeyframes(8, 20);   // ~100 frames for scenes 2-6
 
-  // Full s7 load — start now in background (highest priority)
-  loaderObj.loadSection(7, null, 24).catch(() => {});
-
-  // Background load remaining sections, s7 first
+  // Background load scenes 2–6 in full
   _bgLoad();
 
   // Reveal experience
@@ -122,18 +127,17 @@ async function boot() {
 }
 
 
-async function _bgLoad() {
-  // stride-16 keyframes already loaded synchronously in boot().
-  // Now fill gaps with stride-4 for smoother coverage, then load all frames.
-  await loaderObj.preloadAllKeyframes(4, 20);
 
-  // Full sequential load — s7 already running separately at concurrency-24,
-  // so these calls will await that existing promise (deduped via _promises map)
-  for (const seq of [7, 2, 3, 4, 5, 6]) {
+async function _bgLoad() {
+  // s1 and s7 are already fully loaded during boot (inside the loader bar).
+  // stride-8 keyframes for s2-s6 already loaded synchronously before enterExperience().
+  // Now fill all remaining frames for scenes 2-6.
+  for (const seq of [2, 3, 4, 5, 6]) {
     await loaderObj.loadSection(seq, null, 16);
     await new Promise(r => setTimeout(r, 8));
   }
 }
+
 
 
 
