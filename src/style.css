@@ -268,8 +268,8 @@ body[dir="rtl"] { font-family: var(--font-ar); }
   user-select:   none;
   opacity:       0;
   pointer-events:none;
-  /* Smooth opacity/translate — JS drives --y custom property */
-  transition:    opacity .18s ease-out;
+  /* Smooth opacity/translate — JS drives --y (vertical) or --x (horizontal) */
+  transition:    opacity .18s ease-out, transform .18s ease-out;
   will-change:   opacity, transform;
 }
 
@@ -287,7 +287,7 @@ body[dir="rtl"] { font-family: var(--font-ar); }
 .left-text {
   top:       50%;
   left:      6vw;
-  transform: translateY(calc(-50% + var(--y, 0px)));
+  transform: translate(var(--x, 0px), -50%);
   max-width: 450px;
 }
 
@@ -295,7 +295,7 @@ body[dir="rtl"] { font-family: var(--font-ar); }
   top:       50%;
   right:     6vw;
   left:      auto;
-  transform: translateY(calc(-50% + var(--y, 0px)));
+  transform: translate(var(--x, 0px), -50%);
   max-width: 450px;
 }
 

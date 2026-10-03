@@ -102,33 +102,39 @@ async function boot() {
   const f1 = loaderObj.getFrame(1, 1, true);
   if (f1) renderer.setFrame(f1);
 
-  // Preload boundary anchor frames for ALL sequences (fast: only 14 frames)
+  // Preload anchor frames + sparse keyframes for ALL scenes (stride 16)
+  // This ensures every scene has at least ~12 frames before the user can scroll there
+  $loaderLbl.textContent = 'Preparing scenes…';
   await loaderObj.preloadAnchorFrames();
+  await loaderObj.preloadAllKeyframes(16, 20);   // ~75 frames, ~200ms
 
-  // Fast-track scene 7 in parallel with background load so it's ready ASAP
+  // Full s7 load — start now in background (highest priority)
   loaderObj.loadSection(7, null, 24).catch(() => {});
 
-  // Background load remaining sections with strided keyframes first
+  // Background load remaining sections, s7 first
   _bgLoad();
 
-  // Reveal experience directly — no intermediate button screen
+  // Reveal experience
   $loader.classList.add('fade-out');
   setTimeout(() => $loader.classList.add('hidden'), 650);
 
   enterExperience();
 }
 
-async function _bgLoad() {
-  // Step 1: Preload sparse keyframes (stride 8) across all sequences 2..7
-  // This takes only ~150 requests and guarantees full timeline coverage immediately
-  await loaderObj.preloadAllKeyframes(8, 16);
 
-  // Step 2: Fill in remaining frames — load s7 FIRST so it's ready before user reaches the end
+async function _bgLoad() {
+  // stride-16 keyframes already loaded synchronously in boot().
+  // Now fill gaps with stride-4 for smoother coverage, then load all frames.
+  await loaderObj.preloadAllKeyframes(4, 20);
+
+  // Full sequential load — s7 already running separately at concurrency-24,
+  // so these calls will await that existing promise (deduped via _promises map)
   for (const seq of [7, 2, 3, 4, 5, 6]) {
-    await loaderObj.loadSection(seq, null, 12);
-    await new Promise(r => setTimeout(r, 16));
+    await loaderObj.loadSection(seq, null, 16);
+    await new Promise(r => setTimeout(r, 8));
   }
 }
+
 
 
 /* ═══════════════════════════════════════════════
@@ -449,26 +455,48 @@ function updateText(activeCh, localP) {
     const el = _textEls.get(ch.id);
     if (!el) return;
 
-    let opacity = 0, yPx = 0;
+    let opacity = 0, xPx = 0, yPx = 0;
 
     if (ch.id === activeCh.id) {
       const fIn = 0.14, fOut = 0.86;
       if (idx === 0) {
+        // Scene 1: fade in immediately, fade out near end
         opacity = localP > 0.80 ? 1 - (localP - 0.80) / 0.20 : 1;
       } else if (idx === CHAPTERS.length - 1) {
+        // Last scene: fade in from below
         opacity = localP < fIn ? localP / fIn : 1;
         yPx     = localP < fIn ? 28 * (1 - opacity) : 0;
       } else {
-        if (localP < fIn)        { opacity = localP / fIn;                    yPx =  28 * (1 - opacity); }
-        else if (localP > fOut)  { opacity = 1 - (localP - fOut) / (1 - fOut); yPx = -28 * (1 - opacity); }
+        if (localP < fIn)        { opacity = localP / fIn; }
+        else if (localP > fOut)  { opacity = 1 - (localP - fOut) / (1 - fOut); }
         else                     { opacity = 1; }
       }
     }
 
     const clamped = Math.max(0, Math.min(1, opacity));
-    el.style.opacity      = clamped.toFixed(3);
-    el.style.setProperty('--y', yPx.toFixed(1) + 'px');
-    el.style.pointerEvents= clamped > 0.5 ? 'auto' : 'none';
+
+    // Horizontal slide for left/right cards; vertical for center/last
+    const isLeft  = el.classList.contains('left-text');
+    const isRight = el.classList.contains('right-text');
+
+    if (isLeft) {
+      // Slide in from the left (enters from off-screen left)
+      xPx = clamped < 1 ? -60 * (1 - clamped) : 0;
+      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
+      el.style.removeProperty('--y');
+    } else if (isRight) {
+      // Slide in from the right (enters from off-screen right)
+      xPx = clamped < 1 ? 60 * (1 - clamped) : 0;
+      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
+      el.style.removeProperty('--y');
+    } else {
+      // Center text: vertical slide (up)
+      el.style.setProperty('--y', yPx.toFixed(1) + 'px');
+      el.style.removeProperty('--x');
+    }
+
+    el.style.opacity       = clamped.toFixed(3);
+    el.style.pointerEvents = clamped > 0.5 ? 'auto' : 'none';
   });
 }
 
