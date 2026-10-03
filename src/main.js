@@ -102,8 +102,11 @@ async function boot() {
   const f1 = loaderObj.getFrame(1, 1, true);
   if (f1) renderer.setFrame(f1);
 
-  // Preload boundary anchor frames for ALL sequences (fast: only 12 frames)
-  loaderObj.preloadAnchorFrames().catch(() => {});
+  // Preload boundary anchor frames for ALL sequences (fast: only 14 frames)
+  await loaderObj.preloadAnchorFrames();
+
+  // Fast-track scene 7 in parallel with background load so it's ready ASAP
+  loaderObj.loadSection(7, null, 24).catch(() => {});
 
   // Background load remaining sections with strided keyframes first
   _bgLoad();
@@ -120,12 +123,13 @@ async function _bgLoad() {
   // This takes only ~150 requests and guarantees full timeline coverage immediately
   await loaderObj.preloadAllKeyframes(8, 16);
 
-  // Step 2: Fill in remaining frames section by section
-  for (const seq of [2, 3, 4, 5, 6, 7]) {
+  // Step 2: Fill in remaining frames — load s7 FIRST so it's ready before user reaches the end
+  for (const seq of [7, 2, 3, 4, 5, 6]) {
     await loaderObj.loadSection(seq, null, 12);
     await new Promise(r => setTimeout(r, 16));
   }
 }
+
 
 /* ═══════════════════════════════════════════════
    ENTER EXPERIENCE (DIRECTLY)
@@ -333,6 +337,10 @@ function tick(progress) {
       loaderObj.loadSection(4, null, 12).catch(() => {});
     } else if (typeof ch.seq === 'number') {
       loaderObj.preloadNeighbours(ch.seq);
+      // Extra: when in scene-6, guarantee s7 is loading at high priority
+      if (ch.seq === 6) {
+        loaderObj.loadSection(7, null, 24).catch(() => {});
+      }
     }
   }
 }

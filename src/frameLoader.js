@@ -28,11 +28,12 @@ export function frameUrl(seq, frame, mobile = false) {
    Rejects Vite SPA HTML 200 fallbacks by inspecting content-type
 ───────────────────────────────────────────── */
 export async function detectRealFrameCounts(mobile = false) {
-  const CACHE_KEY = `bmw_m4_fc_${mobile ? 'm' : 'd'}_v5`;
+  const CACHE_KEY = `bmw_m4_fc_${mobile ? 'm' : 'd'}_v6`;
 
-  // Known verified frame counts from the filesystem
+  // Verified frame counts from filesystem (authoritative)
   const defaults = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
 
+  // Return cached counts if valid
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (raw) {
@@ -43,55 +44,25 @@ export async function detectRealFrameCounts(mobile = false) {
     }
   } catch { /* storage unavailable */ }
 
-  const counts = { ...defaults };
-
-  // True existence check: must be HTTP 200 AND an actual image (not text/html fallback)
-  const checkExists = async (seq, frame) => {
-    try {
-      const r = await fetch(frameUrl(seq, frame, mobile), { method: 'HEAD' });
-      const ct = r.headers.get('content-type') || '';
-      return r.ok && (ct.includes('image') || ct.includes('webp'));
-    } catch {
-      return false;
+  // Use defaults directly — counts are verified from filesystem
+  // Do a quick sanity check of s1 frame 1 to confirm server is up
+  try {
+    const r = await fetch(frameUrl(1, 1, mobile), { method: 'HEAD' });
+    const ct = r.headers.get('content-type') || '';
+    if (!r.ok || (!ct.includes('image') && !ct.includes('webp') && !ct.includes('octet-stream'))) {
+      // Server not serving frames properly — return defaults and don't cache
+      console.warn('[FrameLoader] Vite not serving frames as images. Using default counts.');
+      return { ...defaults };
     }
-  };
+  } catch {
+    return { ...defaults };
+  }
 
-  await Promise.all(
-    [1, 2, 3, 4, 5, 6, 7].map(async seq => {
-      const expected = defaults[seq];
-
-      // Fast check: if expected frame exists and expected+1 does not, we have the exact count!
-      const [hasExpected, hasNext] = await Promise.all([
-        checkExists(seq, expected),
-        checkExists(seq, expected + 1)
-      ]);
-
-      if (hasExpected && !hasNext) {
-        counts[seq] = expected;
-        return;
-      }
-
-      // Fallback binary search bounded safely between expected and expected + 60
-      let lo = expected;
-      let hi = expected + 60;
-      let found = expected;
-
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (await checkExists(seq, mid)) {
-          found = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      counts[seq] = found;
-    })
-  );
-
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify(counts)); } catch {}
-  return counts;
+  // Server confirmed working — cache and return defaults
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(defaults)); } catch {}
+  return { ...defaults };
 }
+
 
 /* ─────────────────────────────────────────────
    STRIDED PRIORITY GENERATOR
@@ -179,11 +150,17 @@ export class ProgressiveLoader {
 
   /**
    * Preload strided keyframes across all sequences [2..7] in the background.
-   * Takes only ~150 requests and provides seamless coverage across the entire site.
+   * Scene 7 gets an initial stride-4 pass for denser coverage since it loads last.
+   * Takes only ~200 requests and provides seamless coverage across the entire site.
    */
   async preloadAllKeyframes(stride = 8, concurrency = 16) {
     const tasks = [];
-    for (let s = 2; s <= 7; s++) {
+
+    // s7 gets a finer stride pass first (stride 4) so it has dense coverage ASAP
+    const s7count = this.frameCounts[7] || 192;
+    for (let f = 1; f <= s7count; f += 4) tasks.push({ s: 7, f });
+
+    for (let s = 2; s <= 6; s++) {
       const count = this.frameCounts[s] || 192;
       for (let f = 1; f <= count; f += stride) {
         tasks.push({ s, f });
