@@ -2,13 +2,11 @@
  * frameLoader.js — BMW M4 Experience
  *
  * Responsibilities:
- *  - Detect real frame counts via binary-search HEAD probes (cached in localStorage)
+ *  - Accurate frame count detection: strictly verifies content-type to reject Vite SPA HTML fallbacks
  *  - High-performance ImageBitmap decoding on background threads
- *  - Smart strided preloading: keyframes first so every sequence has full timeline
- *    coverage within seconds, eliminating frame freeze/jerk
- *  - Strict sequence isolation: nearest-neighbour fallback stays within the same sequence
- *  - Anchor frames (start & end of every scene) preloaded immediately to guarantee
- *    flawless, glitch-free transitions
+ *  - Smart strided preloading: keyframes first so every sequence has full timeline coverage
+ *  - Boundary anchor frames: guarantees transition targets are always loaded in advance
+ *  - Sequence-aware neighbour preloading
  */
 
 const FRAME_BASE   = '/frames';
@@ -27,35 +25,56 @@ export function frameUrl(seq, frame, mobile = false) {
 
 /* ─────────────────────────────────────────────
    AUTO-DETECTION OF REAL FRAME COUNTS
+   Rejects Vite SPA HTML 200 fallbacks by inspecting content-type
 ───────────────────────────────────────────── */
 export async function detectRealFrameCounts(mobile = false) {
-  const CACHE_KEY = `bmw_m4_fc_${mobile ? 'm' : 'd'}_v4`;
+  const CACHE_KEY = `bmw_m4_fc_${mobile ? 'm' : 'd'}_v5`;
+
+  // Known verified frame counts from the filesystem
+  const defaults = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
 
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && [1,2,3,4,5,6,7].every(s => parsed[s] > 0)) return parsed;
+      if (parsed && [1, 2, 3, 4, 5, 6, 7].every(s => parsed[s] >= 100 && parsed[s] <= 300)) {
+        return parsed;
+      }
     }
   } catch { /* storage unavailable */ }
 
-  const defaults = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
-  const counts   = { ...defaults };
+  const counts = { ...defaults };
 
+  // True existence check: must be HTTP 200 AND an actual image (not text/html fallback)
   const checkExists = async (seq, frame) => {
     try {
       const r = await fetch(frameUrl(seq, frame, mobile), { method: 'HEAD' });
-      return r.ok;
-    } catch { return false; }
+      const ct = r.headers.get('content-type') || '';
+      return r.ok && (ct.includes('image') || ct.includes('webp'));
+    } catch {
+      return false;
+    }
   };
 
   await Promise.all(
-    [1,2,3,4,5,6,7].map(async seq => {
-      let lo = defaults[seq];
-      let hi = lo + 60;
-      let found = lo;
+    [1, 2, 3, 4, 5, 6, 7].map(async seq => {
+      const expected = defaults[seq];
 
-      while (await checkExists(seq, hi)) { hi += 30; }
+      // Fast check: if expected frame exists and expected+1 does not, we have the exact count!
+      const [hasExpected, hasNext] = await Promise.all([
+        checkExists(seq, expected),
+        checkExists(seq, expected + 1)
+      ]);
+
+      if (hasExpected && !hasNext) {
+        counts[seq] = expected;
+        return;
+      }
+
+      // Fallback binary search bounded safely between expected and expected + 60
+      let lo = expected;
+      let hi = expected + 60;
+      let found = expected;
 
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
@@ -76,8 +95,6 @@ export async function detectRealFrameCounts(mobile = false) {
 
 /* ─────────────────────────────────────────────
    STRIDED PRIORITY GENERATOR
-   Produces a sequence order that rapidly covers the entire timeline
-   (boundaries -> stride 8 -> stride 4 -> stride 2 -> full fill)
 ───────────────────────────────────────────── */
 function getPriorityFrameOrder(count) {
   const seen = new Set();
@@ -130,7 +147,15 @@ export class ProgressiveLoader {
     try {
       const res = await fetch(frameUrl(seq, frameNum, this.mobile));
       if (!res.ok) return null;
-      const bmp = await createImageBitmap(await res.blob());
+
+      // Reject Vite SPA HTML fallback
+      const ct = res.headers.get('content-type') || '';
+      if (ct && !ct.includes('image') && !ct.includes('webp') && !ct.includes('octet-stream')) {
+        return null;
+      }
+
+      const blob = await res.blob();
+      const bmp = await createImageBitmap(blob);
       this.cache[seq][frameNum] = bmp;
       return bmp;
     } catch {
@@ -139,8 +164,8 @@ export class ProgressiveLoader {
   }
 
   /**
-   * Preload the boundary anchor frames (frame 1 and frame count) for ALL sequences.
-   * This is fast (~50-100ms) and guarantees that every transition target is ready.
+   * Preload boundary anchor frames (frame 1 and frame count) for ALL sequences.
+   * Runs in ~50-100ms and guarantees that every transition target is ready.
    */
   async preloadAnchorFrames() {
     const promises = [];
@@ -260,18 +285,21 @@ export class ProgressiveLoader {
     this._done.add(key);
   }
 
-  /** Prioritize background loading for current and upcoming sections */
-  preloadNeighbours(currentSeq, allSeqs = [1,2,3,4,5,6,7]) {
-    const idx = allSeqs.indexOf(currentSeq);
-    const priorities = [
-      allSeqs[idx + 1],
-      allSeqs[idx],
-      allSeqs[idx + 2],
-      allSeqs[idx - 1],
-    ].filter(s => s != null && !this._done.has(`s${s}`) && !this._promises.has(`s${s}`));
+  /** Smart sequence-aware neighbour preloading */
+  preloadNeighbours(currentSeq) {
+    let nextSeqs = [];
+    if (currentSeq === 1) nextSeqs = [2, 3];
+    else if (currentSeq === 2) nextSeqs = [3, 1];
+    else if (currentSeq === 3) nextSeqs = [2, 4]; // Scene R needs 2 & 4!
+    else if (currentSeq === 4) nextSeqs = [5, 6];
+    else if (currentSeq === 5) nextSeqs = [6, 7];
+    else if (currentSeq === 6) nextSeqs = [7, 5];
+    else if (currentSeq === 7) nextSeqs = [6];
 
-    for (const seq of priorities) {
-      this.loadSection(seq, null, 12).catch(() => {});
+    for (const seq of nextSeqs) {
+      if (!this._done.has(`s${seq}`) && !this._promises.has(`s${seq}`)) {
+        this.loadSection(seq, null, 12).catch(() => {});
+      }
     }
   }
 

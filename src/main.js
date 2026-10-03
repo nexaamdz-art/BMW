@@ -327,8 +327,13 @@ function tick(progress) {
   }
   if (p < 0.25) statsAnimated = false;
 
-  if (localP > 0.65 && typeof ch.seq === 'number') {
-    loaderObj.preloadNeighbours(ch.seq);
+  if (localP > 0.5) {
+    if (ch.seq === 'r') {
+      loaderObj.loadSection(2, null, 12).catch(() => {});
+      loaderObj.loadSection(4, null, 12).catch(() => {});
+    } else if (typeof ch.seq === 'number') {
+      loaderObj.preloadNeighbours(ch.seq);
+    }
   }
 }
 
