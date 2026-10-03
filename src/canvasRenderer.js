@@ -3,9 +3,9 @@
  *
  * Responsibilities:
  *  - Maintain a DPR-aware, cover-fit canvas
- *  - Draw the current frame + optional crossfade to the next frame
- *  - Velocity-influenced crossfade strength
- *  - Never flash black: if bitmap is null, hold last valid frame
+ *  - Draw base frame + smooth crossfade frame with zero ghosting
+ *  - Sequence transition guards: never crossfades identical bitmaps
+ *  - Anti-flash fallback: holds last valid bitmap if a frame decode is pending
  *  - RAF loop only redraws when dirty
  */
 
@@ -18,12 +18,10 @@ export class CanvasRenderer {
     this.height  = 0;
 
     // Frame state
-    this.currentBmp   = null;   // what's drawn as the base layer
-    this.nextBmp      = null;   // what's drawn on top (crossfade)
-    this.crossAlpha   = 0;
-
-    // Held last-valid bitmap to prevent black flash
-    this._lastValidBmp = null;
+    this.currentBmp    = null;   // primary base frame
+    this.nextBmp       = null;   // crossfade target frame
+    this.crossAlpha    = 0;      // blend ratio [0..1]
+    this._lastValidBmp = null;   // anti-black-flash bitmap
 
     this._dirty = true;
     this._raf   = null;
@@ -44,17 +42,17 @@ export class CanvasRenderer {
     this.canvas.width  = Math.round(this.width  * this.dpr);
     this.canvas.height = Math.round(this.height * this.dpr);
 
-    // Use setTransform to avoid cumulative scale on every resize
+    // Apply DPR scale via setTransform to prevent cumulative scale
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this._dirty = true;
   }
 
   /* ---- Object-fit cover math ---- */
   _coverRect(bmp) {
-    const cw = this.width, ch = this.height;
-    const bw = bmp.width,  bh = bmp.height;
+    const cw = this.width,  ch = this.height;
+    const bw = bmp.width,   bh = bmp.height;
     const scale = Math.max(cw / bw, ch / bh);
-    const w = bw * scale,  h = bh * scale;
+    const w = bw * scale,   h = bh * scale;
     return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
   }
 
@@ -68,21 +66,23 @@ export class CanvasRenderer {
   }
 
   /**
-   * Set the frame state for the next RAF tick.
+   * Set the frame state for the next RAF render tick.
    *
-   * @param {ImageBitmap|null} current   – primary frame
-   * @param {ImageBitmap|null} next      – crossfade target (or null)
-   * @param {number}           alpha     – crossfade mix [0..1]
+   * @param {ImageBitmap|null} current - Base frame
+   * @param {ImageBitmap|null} next    - Crossfade target frame (or null)
+   * @param {number}           alpha   - Crossfade mix [0..1]
    */
   setFrame(current, next = null, alpha = 0) {
-    // Hold last valid bitmap so canvas never goes dark
     if (current)                    this._lastValidBmp = current;
     else if (this._lastValidBmp)    current = this._lastValidBmp;
 
     this.currentBmp = current;
-    this.nextBmp    = next && alpha > 0.005 ? next : null;
-    this.crossAlpha = Math.max(0, Math.min(1, alpha));
-    this._dirty = true;
+
+    // Disallow crossfading between identical bitmaps to prevent double-draw artifacts
+    const isValidNext = next && next !== current && alpha > 0.005;
+    this.nextBmp    = isValidNext ? next : null;
+    this.crossAlpha = isValidNext ? Math.max(0, Math.min(1, alpha)) : 0;
+    this._dirty     = true;
   }
 
   /* ---- Render ---- */
@@ -94,10 +94,17 @@ export class CanvasRenderer {
     ctx.fillStyle = '#050607';
     ctx.fillRect(0, 0, this.width, this.height);
 
-    this._drawCover(this.currentBmp, 1);
+    if (!this.currentBmp && !this.nextBmp) return;
 
-    if (this.nextBmp && this.crossAlpha > 0.005) {
+    if (this.nextBmp && this.crossAlpha >= 0.995) {
+      // 100% transition complete
+      this._drawCover(this.nextBmp, 1);
+    } else if (this.nextBmp && this.crossAlpha > 0.005) {
+      // Smooth dissolve
+      this._drawCover(this.currentBmp, 1);
       this._drawCover(this.nextBmp, this.crossAlpha);
+    } else if (this.currentBmp) {
+      this._drawCover(this.currentBmp, 1);
     }
   }
 

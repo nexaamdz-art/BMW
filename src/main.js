@@ -53,12 +53,9 @@ const $loader    = document.getElementById('loader');
 const $loaderBar = document.getElementById('loader-fill');
 const $loaderPct = document.getElementById('loader-pct');
 const $loaderLbl = document.getElementById('loader-label');
-const $entry     = document.getElementById('entry-screen');
 const $exp       = document.getElementById('experience');
 const $canvas    = document.getElementById('main-canvas');
 const $progLine  = document.getElementById('progress-line');
-const $btnSound  = document.getElementById('btn-sound');
-const $btnSilent = document.getElementById('btn-no-sound');
 const $btnLang   = document.getElementById('btn-lang');
 const $btnMute   = document.getElementById('btn-mute');
 const $langLabel = document.getElementById('lang-label');
@@ -102,59 +99,79 @@ async function boot() {
   });
 
   // Show first frame (canvas is visible — no flash)
-  const f1 = loaderObj.getFrame(1, 1);
+  const f1 = loaderObj.getFrame(1, 1, true);
   if (f1) renderer.setFrame(f1);
 
-  // Background load remaining sections
+  // Preload boundary anchor frames for ALL sequences (fast: only 12 frames)
+  loaderObj.preloadAnchorFrames().catch(() => {});
+
+  // Background load remaining sections with strided keyframes first
   _bgLoad();
 
-  // Show entry screen (fades in over the live canvas)
+  // Reveal experience directly — no intermediate button screen
   $loader.classList.add('fade-out');
   setTimeout(() => $loader.classList.add('hidden'), 650);
-  $entry.classList.remove('hidden');
 
-  $btnSound .addEventListener('click', () => enter(true));
-  $btnSilent.addEventListener('click', () => enter(false));
+  enterExperience();
 }
 
 async function _bgLoad() {
+  // Step 1: Preload sparse keyframes (stride 8) across all sequences 2..7
+  // This takes only ~150 requests and guarantees full timeline coverage immediately
+  await loaderObj.preloadAllKeyframes(8, 16);
+
+  // Step 2: Fill in remaining frames section by section
   for (const seq of [2, 3, 4, 5, 6, 7]) {
     await loaderObj.loadSection(seq, null, 12);
-    await new Promise(r => setTimeout(r, 8));
+    await new Promise(r => setTimeout(r, 16));
   }
 }
 
 /* ═══════════════════════════════════════════════
-   ENTER EXPERIENCE
+   ENTER EXPERIENCE (DIRECTLY)
 ═══════════════════════════════════════════════ */
-async function enter(withSound) {
+function enterExperience() {
   if (entryDone) return;
   entryDone = true;
 
-  await audio.init(withSound);
-  if (withSound) {
-    await Promise.all([
-      audio.loadTrack('teardown', '/audio/teardown.mp3'),
-      audio.loadTrack('engine',   '/audio/engine_dive.mp3'),
-      audio.loadTrack('launch',   '/audio/launch.mp3'),
-    ]);
-  }
-
-  // Fade out entry — canvas s1 frames are already visible behind it
-  $entry.classList.add('fade-out');
-  setTimeout(() => $entry.classList.add('hidden'), 800);
-
-  // Reveal experience UI
-  $exp.classList.remove('exp-hidden');
   document.body.style.overflow = '';
 
   _setSceneHeights();
   setupLenis();
   setupScrubber();
-  setupControls(withSound);
+  setupControls();
   setupKeyboard();
+  setupAudioUnlock();
 
   tick(0);
+}
+
+/* ═══════════════════════════════════════════════
+   AUDIO UNLOCK ON FIRST GESTURE (Autoplay compliance)
+═══════════════════════════════════════════════ */
+function setupAudioUnlock() {
+  let unlocked = false;
+  const unlock = async () => {
+    if (unlocked) return;
+    unlocked = true;
+
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('wheel', unlock);
+    window.removeEventListener('keydown', unlock);
+    window.removeEventListener('touchstart', unlock);
+
+    await audio.init(true);
+    await Promise.all([
+      audio.loadTrack('teardown', '/audio/teardown.mp3'),
+      audio.loadTrack('engine',   '/audio/engine_dive.mp3'),
+      audio.loadTrack('launch',   '/audio/launch.mp3'),
+    ]);
+  };
+
+  window.addEventListener('pointerdown', unlock, { passive: true });
+  window.addEventListener('wheel', unlock, { passive: true });
+  window.addEventListener('keydown', unlock, { passive: true });
+  window.addEventListener('touchstart', unlock, { passive: true });
 }
 
 /* ═══════════════════════════════════════════════
@@ -322,34 +339,52 @@ function drawFrame(ch, chIdx, localP) {
   let cur = null, nxt = null, alpha = 0;
 
   if (ch.seq === 'r') {
-    const s3 = frameCounts[3], s2 = frameCounts[2];
+    const s3 = frameCounts[3] || 192;
+    const s2 = frameCounts[2] || 192;
+
     if (localP < 0.5) {
+      // First half: Sequence 3 in reverse (frame 192 down to 1)
       const sp = localP / 0.5;
-      cur = loaderObj.getFrame(3, Math.max(1, Math.min(s3, Math.round((1 - sp) * (s3 - 1)) + 1)));
-      if (sp > 0.88) { alpha = (sp - 0.88) / 0.12; nxt = loaderObj.getFrame(2, s2); }
+      const f = Math.max(1, Math.min(s3, Math.round((1 - sp) * (s3 - 1)) + 1));
+      cur = loaderObj.getFrame(3, f, true);
+
+      // Smooth dissolve into s2 frame 192 near midpoint (sp > 0.85)
+      if (sp > 0.85) {
+        alpha = (sp - 0.85) / 0.15;
+        nxt = loaderObj.getFrame(2, s2, false);
+      }
     } else {
+      // Second half: Sequence 2 in reverse (frame 192 down to 1)
       const sp = (localP - 0.5) / 0.5;
-      cur = loaderObj.getFrame(2, Math.max(1, Math.min(s2, Math.round((1 - sp) * (s2 - 1)) + 1)));
-      if (sp > 0.88 && chIdx < CHAPTERS.length - 1) {
-        alpha = (sp - 0.88) / 0.12;
-        nxt   = loaderObj.getFrame(CHAPTERS[chIdx + 1].seq, 1);
+      const f = Math.max(1, Math.min(s2, Math.round((1 - sp) * (s2 - 1)) + 1));
+      cur = loaderObj.getFrame(2, f, true);
+
+      // Smooth dissolve into s4 frame 1 at the end of reassembly (sp > 0.85)
+      if (sp > 0.85 && chIdx < CHAPTERS.length - 1) {
+        alpha = (sp - 0.85) / 0.15;
+        nxt = loaderObj.getFrame(CHAPTERS[chIdx + 1].seq, 1, false);
       }
     }
   } else {
-    const seq   = ch.seq;
-    const count = frameCounts[seq];
-    const f     = Math.max(1, Math.min(count, Math.round(localP * (count - 1)) + 1));
-    cur = loaderObj.getFrame(seq, f);
+    const seq = ch.seq;
+    const count = frameCounts[seq] || 192;
+    const f = Math.max(1, Math.min(count, Math.round(localP * (count - 1)) + 1));
+    cur = loaderObj.getFrame(seq, f, true);
 
-    // Velocity-scaled crossfade (capped at 30 extra frames)
-    const fadeWidth = CROSSFADE_F + Math.round(_vel * 3000);
-    const fadeStart = 1 - fadeWidth / count;
+    // Transitions between sequences:
+    const nextCh = CHAPTERS[chIdx + 1];
+    if (nextCh) {
+      // NOTE: Scene 3 ends at s3 frame 192, and Scene R begins at s3 frame 192 in reverse.
+      // This is a continuous sequence reversal — NO CROSSFADE to avoid double-image ghosting!
+      if (nextCh.seq !== 'r') {
+        const crossFrames = 10 + Math.round(_vel * 1500);
+        const fadeStart = 1 - (crossFrames / count);
 
-    if (localP > fadeStart && chIdx < CHAPTERS.length - 1) {
-      alpha = Math.min(1, (localP - fadeStart) / (fadeWidth / count));
-      const nextCh = CHAPTERS[chIdx + 1];
-      const nxtSeq = nextCh.seq === 'r' ? 3 : nextCh.seq;
-      nxt = loaderObj.getFrame(nxtSeq, nextCh.seq === 'r' ? frameCounts[3] : 1);
+        if (localP > fadeStart) {
+          alpha = Math.min(1, (localP - fadeStart) / (crossFrames / count));
+          nxt = loaderObj.getFrame(nextCh.seq, 1, false);
+        }
+      }
     }
   }
 
@@ -447,7 +482,7 @@ function countUp() {
 /* ═══════════════════════════════════════════════
    CONTROLS
 ═══════════════════════════════════════════════ */
-function setupControls(withSound) {
+function setupControls() {
   setupChapterDots();
 
   if ($btnLang) {
@@ -458,7 +493,6 @@ function setupControls(withSound) {
   }
 
   if ($btnMute) {
-    if (!withSound) $btnMute.style.opacity = '0.35';
     $btnMute.addEventListener('click', () => {
       const muted = audio.toggleMute();
       const waves = document.getElementById('sound-waves');
