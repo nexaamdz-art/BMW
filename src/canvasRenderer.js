@@ -1,102 +1,112 @@
 /**
- * canvasRenderer.js
- * Fixed fullscreen canvas that draws image-sequence frames
- * with object-fit: cover logic and smooth cross-fade blending.
+ * canvasRenderer.js — BMW M4 Experience
+ *
+ * Responsibilities:
+ *  - Maintain a DPR-aware, cover-fit canvas
+ *  - Draw the current frame + optional crossfade to the next frame
+ *  - Velocity-influenced crossfade strength
+ *  - Never flash black: if bitmap is null, hold last valid frame
+ *  - RAF loop only redraws when dirty
  */
 
 export class CanvasRenderer {
   constructor(canvas) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false });
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.width = window.innerWidth;
-    this.height = window.innerHeight;
-    this.currentBitmap = null;
-    this.nextBitmap = null;
-    this.crossfadeAlpha = 0;
-    this._raf = null;
+    this.canvas  = canvas;
+    this.ctx     = canvas.getContext('2d', { alpha: false, willReadFrequently: false });
+    this.dpr     = 1;
+    this.width   = 0;
+    this.height  = 0;
+
+    // Frame state
+    this.currentBmp   = null;   // what's drawn as the base layer
+    this.nextBmp      = null;   // what's drawn on top (crossfade)
+    this.crossAlpha   = 0;
+
+    // Held last-valid bitmap to prevent black flash
+    this._lastValidBmp = null;
+
     this._dirty = true;
+    this._raf   = null;
 
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('resize', () => this.resize(), { passive: true });
     this._startRaf();
   }
 
+  /* ---- Layout ---- */
   resize() {
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.width = window.innerWidth;
+    this.dpr    = Math.min(window.devicePixelRatio || 1, 2);
+    this.width  = window.innerWidth;
     this.height = window.innerHeight;
 
-    this.canvas.style.width = this.width + 'px';
-    this.canvas.style.height = this.height + 'px';
-    this.canvas.width = Math.round(this.width * this.dpr);
+    this.canvas.style.width  = `${this.width}px`;
+    this.canvas.style.height = `${this.height}px`;
+    this.canvas.width  = Math.round(this.width  * this.dpr);
     this.canvas.height = Math.round(this.height * this.dpr);
 
+    // Use setTransform to avoid cumulative scale on every resize
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this._dirty = true;
   }
 
-  /** Cover-fit: draw bitmap centered, scaled to cover the canvas */
+  /* ---- Object-fit cover math ---- */
+  _coverRect(bmp) {
+    const cw = this.width, ch = this.height;
+    const bw = bmp.width,  bh = bmp.height;
+    const scale = Math.max(cw / bw, ch / bh);
+    const w = bw * scale,  h = bh * scale;
+    return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
+  }
+
   _drawCover(bmp, alpha = 1) {
     if (!bmp) return;
-    const cw = this.width;
-    const ch = this.height;
-    const bw = bmp.width;
-    const bh = bmp.height;
-
-    const scale = Math.max(cw / bw, ch / bh);
-    const sw = bw * scale;
-    const sh = bh * scale;
-    const sx = (cw - sw) / 2;
-    const sy = (ch - sh) / 2;
-
-    if (alpha < 1) {
-      this.ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    }
-    this.ctx.drawImage(bmp, sx, sy, sw, sh);
-    if (alpha < 1) {
-      this.ctx.globalAlpha = 1;
-    }
+    const ctx = this.ctx;
+    if (alpha < 0.999) ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    const { x, y, w, h } = this._coverRect(bmp);
+    ctx.drawImage(bmp, x, y, w, h);
+    if (alpha < 0.999) ctx.globalAlpha = 1;
   }
 
   /**
-   * Set the frame to draw.
-   * If nextBitmap is provided with crossfadeAlpha > 0, blends nextBitmap over currentBitmap.
+   * Set the frame state for the next RAF tick.
+   *
+   * @param {ImageBitmap|null} current   – primary frame
+   * @param {ImageBitmap|null} next      – crossfade target (or null)
+   * @param {number}           alpha     – crossfade mix [0..1]
    */
-  setFrame(bitmap, nextBitmap = null, crossfadeAlpha = 0) {
-    this.currentBitmap = bitmap;
-    this.nextBitmap = nextBitmap;
-    this.crossfadeAlpha = Math.max(0, Math.min(1, crossfadeAlpha));
+  setFrame(current, next = null, alpha = 0) {
+    // Hold last valid bitmap so canvas never goes dark
+    if (current)                    this._lastValidBmp = current;
+    else if (this._lastValidBmp)    current = this._lastValidBmp;
+
+    this.currentBmp = current;
+    this.nextBmp    = next && alpha > 0.005 ? next : null;
+    this.crossAlpha = Math.max(0, Math.min(1, alpha));
     this._dirty = true;
   }
 
+  /* ---- Render ---- */
   _render() {
     if (!this._dirty) return;
     this._dirty = false;
 
     const ctx = this.ctx;
-    const cw = this.width;
-    const ch = this.height;
-
-    // Background fill
     ctx.fillStyle = '#050607';
-    ctx.fillRect(0, 0, cw, ch);
+    ctx.fillRect(0, 0, this.width, this.height);
 
-    if (this.currentBitmap) {
-      this._drawCover(this.currentBitmap, 1);
-    }
+    this._drawCover(this.currentBmp, 1);
 
-    if (this.nextBitmap && this.crossfadeAlpha > 0.005) {
-      this._drawCover(this.nextBitmap, this.crossfadeAlpha);
+    if (this.nextBmp && this.crossAlpha > 0.005) {
+      this._drawCover(this.nextBmp, this.crossAlpha);
     }
   }
 
   _startRaf() {
-    const loop = () => {
+    const tick = () => {
       this._render();
-      this._raf = requestAnimationFrame(loop);
+      this._raf = requestAnimationFrame(tick);
     };
-    this._raf = requestAnimationFrame(loop);
+    this._raf = requestAnimationFrame(tick);
   }
 
   destroy() {

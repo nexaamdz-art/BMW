@@ -1,469 +1,482 @@
 /**
- * main.js
- * BMW M4 Fan Concept — The Art of Power
- * Orchestrator: Lenis smooth scroll, GSAP ScrollTrigger, Canvas image-sequence rendering,
- * Web Audio synchronization, i18n, and progressive preloading.
+ * main.js — BMW M4 Fan Concept: The Art of Power
+ *
+ * Canvas and grain now live at body root — they render frames
+ * even during the loader & entry screen, so "Enter" reveals them
+ * instantly with no black flash.
  */
 
 import './style.css';
-import gsap from 'gsap';
+import gsap              from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import Lenis from 'lenis';
+import Lenis             from 'lenis';
 import { detectRealFrameCounts, ProgressiveLoader } from './frameLoader.js';
-import { CanvasRenderer } from './canvasRenderer.js';
-import { AudioManager } from './audioManager.js';
-import { I18n } from './i18n.js';
+import { CanvasRenderer }  from './canvasRenderer.js';
+import { AudioManager }    from './audioManager.js';
+import { I18n }            from './i18n.js';
 
 gsap.registerPlugin(ScrollTrigger);
 
-/* ─────────────────────────────────────────────
-   CONSTANTS & TIMELINE CONFIG
-───────────────────────────────────────────── */
-const MOBILE_BREAKPOINT = 768;
-const CROSSFADE_FRAMES = 6;
+/* ═══════════════════════════════════════════════
+   TIMELINE CONFIG
+═══════════════════════════════════════════════ */
+const TOTAL_VH    = 900;
+const CROSSFADE_F = 6;
+const MOBILE_BP   = 768;
 
-// 8 Timeline chapters across one continuous 900vh scroll
 const CHAPTERS = [
-  { id: 'scene-1', seq: 1, name: 's1', start: 0.000, end: 0.125, isReverse: false },
-  { id: 'scene-2', seq: 2, name: 's2', start: 0.125, end: 0.250, isReverse: false },
-  { id: 'scene-3', seq: 3, name: 's3', start: 0.250, end: 0.375, isReverse: false },
-  { id: 'scene-r', seq: 'r', name: 'reverse', start: 0.375, end: 0.520, isReverse: true },
-  { id: 'scene-4', seq: 4, name: 's4', start: 0.520, end: 0.640, isReverse: false },
-  { id: 'scene-5', seq: 5, name: 's5', start: 0.640, end: 0.760, isReverse: false },
-  { id: 'scene-6', seq: 6, name: 's6', start: 0.760, end: 0.880, isReverse: false },
-  { id: 'scene-7', seq: 7, name: 's7', start: 0.880, end: 1.000, isReverse: false },
+  { id: 'scene-1', seq: 1, start: 0.000, end: 0.125 },
+  { id: 'scene-2', seq: 2, start: 0.125, end: 0.250 },
+  { id: 'scene-3', seq: 3, start: 0.250, end: 0.375 },
+  { id: 'scene-r', seq: 'r', start: 0.375, end: 0.520 },
+  { id: 'scene-4', seq: 4, start: 0.520, end: 0.640 },
+  { id: 'scene-5', seq: 5, start: 0.640, end: 0.760 },
+  { id: 'scene-6', seq: 6, start: 0.760, end: 0.880 },
+  { id: 'scene-7', seq: 7, start: 0.880, end: 1.000 },
 ];
 
-/* ─────────────────────────────────────────────
-   GLOBAL STATE
-───────────────────────────────────────────── */
-let isMobile = window.innerWidth < MOBILE_BREAKPOINT;
-let frameCounts = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
-let progressiveLoader;
-let renderer;
-let audio;
-let i18n;
-let lenis;
-let statsAnimated = false;
-let experienceActive = false;
+/* ═══════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════ */
+let isMobile        = window.innerWidth < MOBILE_BP;
+let frameCounts     = { 1:192, 2:192, 3:192, 4:240, 5:240, 6:240, 7:192 };
+let loaderObj, renderer, audio, i18n, lenis;
+let activeChapterId = null;
+let statsAnimated   = false;
+let entryDone       = false;
+let scrollHintGone  = false;
 
-/* ─────────────────────────────────────────────
-   DOM REFERENCES
-───────────────────────────────────────────── */
-const loaderEl = document.getElementById('loader');
-const loaderFill = document.getElementById('loader-fill');
-const loaderPct = document.getElementById('loader-pct');
-const loaderLabel = document.getElementById('loader-label');
-const entryScreen = document.getElementById('entry-screen');
-const experience = document.getElementById('experience');
-const canvas = document.getElementById('main-canvas');
-const progressLine = document.getElementById('progress-line');
-const btnSound = document.getElementById('btn-sound');
-const btnNoSound = document.getElementById('btn-no-sound');
-const btnLang = document.getElementById('btn-lang');
-const btnMute = document.getElementById('btn-mute');
-const langLabel = document.getElementById('lang-label');
-const scrollContainer = document.getElementById('scroll-container');
+/* ═══════════════════════════════════════════════
+   DOM REFS
+═══════════════════════════════════════════════ */
+const $loader    = document.getElementById('loader');
+const $loaderBar = document.getElementById('loader-fill');
+const $loaderPct = document.getElementById('loader-pct');
+const $loaderLbl = document.getElementById('loader-label');
+const $entry     = document.getElementById('entry-screen');
+const $exp       = document.getElementById('experience');
+const $canvas    = document.getElementById('main-canvas');
+const $progLine  = document.getElementById('progress-line');
+const $btnSound  = document.getElementById('btn-sound');
+const $btnSilent = document.getElementById('btn-no-sound');
+const $btnLang   = document.getElementById('btn-lang');
+const $btnMute   = document.getElementById('btn-mute');
+const $langLabel = document.getElementById('lang-label');
+const $scrollBox = document.getElementById('scroll-container');
+const $chapterNav= document.getElementById('chapter-nav');
+const $chapterDots = $chapterNav ? Array.from($chapterNav.querySelectorAll('.chapter-dot')) : [];
 
-/* ─────────────────────────────────────────────
-   INITIALIZATION
-───────────────────────────────────────────── */
-async function init() {
-  isMobile = window.innerWidth < MOBILE_BREAKPOINT;
+// Cached text overlay elements (populated in setupScrubber after DOM is ready)
+const _textEls = new Map();
 
-  // 1. Probe & cache actual frame counts automatically
-  loaderLabel.textContent = 'Analyzing assets…';
+/* ═══════════════════════════════════════════════
+   BOOT — canvas renders s1 frames immediately
+═══════════════════════════════════════════════ */
+window.addEventListener('DOMContentLoaded', () => {
+  document.body.style.overflow = 'hidden';
+  // Canvas is at body level — init renderer now so frames render behind the loader
+  renderer = new CanvasRenderer($canvas);
+  boot().catch(err => console.error('[Boot]', err));
+});
+
+async function boot() {
+  isMobile = window.innerWidth < MOBILE_BP;
+
+  $loaderLbl.textContent = 'Analyzing frames…';
   frameCounts = await detectRealFrameCounts(isMobile);
 
-  // 2. Initialize subsystems
-  progressiveLoader = new ProgressiveLoader(frameCounts, isMobile);
-  renderer = new CanvasRenderer(canvas);
-  audio = new AudioManager();
-  i18n = new I18n();
+  loaderObj = new ProgressiveLoader(frameCounts, isMobile);
+  audio     = new AudioManager();
+  i18n      = new I18n();
 
-  // 3. Preload section 1 for seamless entrance
-  loaderLabel.textContent = 'Loading experience…';
-  let loadedFrames = 0;
-  const s1Count = frameCounts[1];
+  // Load s1 and display immediately — canvas is already rendering
+  $loaderLbl.textContent = 'Loading experience…';
+  let loaded = 0;
+  const s1Total = frameCounts[1];
 
-  await progressiveLoader.loadSection(1, () => {
-    loadedFrames++;
-    const pct = Math.min(100, Math.round((loadedFrames / s1Count) * 100));
-    loaderFill.style.width = `${pct}%`;
-    loaderPct.textContent = `${pct}%`;
+  await loaderObj.loadSection(1, () => {
+    loaded++;
+    const pct = Math.min(100, Math.round(loaded / s1Total * 100));
+    $loaderBar.style.width = pct + '%';
+    $loaderPct.textContent = pct + '%';
   });
 
-  // Render initial frame immediately
-  const firstFrame = progressiveLoader.getFrame(1, 1);
-  if (firstFrame) {
-    renderer.setFrame(firstFrame);
-  }
+  // Show first frame (canvas is visible — no flash)
+  const f1 = loaderObj.getFrame(1, 1);
+  if (f1) renderer.setFrame(f1);
 
-  // 4. Background preloading of sequences 2..7
-  preloadRemainingSequences();
+  // Background load remaining sections
+  _bgLoad();
 
-  // 5. Reveal entry screen
-  loaderEl.classList.add('fade-out');
-  setTimeout(() => loaderEl.classList.add('hidden'), 650);
+  // Show entry screen (fades in over the live canvas)
+  $loader.classList.add('fade-out');
+  setTimeout(() => $loader.classList.add('hidden'), 650);
+  $entry.classList.remove('hidden');
 
-  // 6. Hook up entry buttons
-  btnSound.addEventListener('click', () => enterExperience(true));
-  btnNoSound.addEventListener('click', () => enterExperience(false));
+  $btnSound .addEventListener('click', () => enter(true));
+  $btnSilent.addEventListener('click', () => enter(false));
 }
 
-async function preloadRemainingSequences() {
-  const seqs = [2, 3, 4, 5, 6, 7];
-  for (const seq of seqs) {
-    await progressiveLoader.loadSection(seq, null, 6);
-    // Yield to main thread
-    await new Promise((resolve) => setTimeout(resolve, 30));
+async function _bgLoad() {
+  for (const seq of [2, 3, 4, 5, 6, 7]) {
+    await loaderObj.loadSection(seq, null, 12);
+    await new Promise(r => setTimeout(r, 8));
   }
 }
 
-/* ─────────────────────────────────────────────
+/* ═══════════════════════════════════════════════
    ENTER EXPERIENCE
-───────────────────────────────────────────── */
-async function enterExperience(withSound) {
-  if (experienceActive) return;
-  experienceActive = true;
+═══════════════════════════════════════════════ */
+async function enter(withSound) {
+  if (entryDone) return;
+  entryDone = true;
 
-  // Initialize audio post user click
   await audio.init(withSound);
   if (withSound) {
     await Promise.all([
       audio.loadTrack('teardown', '/audio/teardown.mp3'),
-      audio.loadTrack('engine', '/audio/engine_dive.mp3'),
-      audio.loadTrack('launch', '/audio/launch.mp3'),
+      audio.loadTrack('engine',   '/audio/engine_dive.mp3'),
+      audio.loadTrack('launch',   '/audio/launch.mp3'),
     ]);
   }
 
-  // Transition UI
-  entryScreen.classList.add('fade-out');
-  setTimeout(() => entryScreen.classList.add('hidden'), 800);
-  experience.classList.remove('hidden');
+  // Fade out entry — canvas s1 frames are already visible behind it
+  $entry.classList.add('fade-out');
+  setTimeout(() => $entry.classList.add('hidden'), 800);
 
-  // Allow scrolling
+  // Reveal experience UI
+  $exp.classList.remove('exp-hidden');
   document.body.style.overflow = '';
 
-  // Setup height (900vh total)
-  scrollContainer.style.height = '900vh';
-
-  // Setup smooth scroll & ScrollTrigger
+  _setSceneHeights();
   setupLenis();
-  setupTimelineScrubber();
+  setupScrubber();
   setupControls(withSound);
+  setupKeyboard();
 
-  // Trigger initial frame
-  updateTimeline(0);
+  tick(0);
 }
 
-/* ─────────────────────────────────────────────
-   LENIS SMOOTH SCROLL
-───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   SECTION HEIGHTS
+═══════════════════════════════════════════════ */
+function _setSceneHeights() {
+  let total = 0;
+  CHAPTERS.forEach(ch => {
+    const el = document.getElementById(ch.id);
+    if (!el) return;
+    const vh = Math.round((ch.end - ch.start) * TOTAL_VH * 10) / 10;
+    el.style.height = vh + 'vh';
+    total += vh;
+  });
+  $scrollBox.style.height = total + 'vh';
+}
+
+/* ═══════════════════════════════════════════════
+   LENIS
+═══════════════════════════════════════════════ */
 function setupLenis() {
   lenis = new Lenis({
-    duration: 1.2,
-    easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-    orientation: 'vertical',
-    smoothWheel: true,
-    wheelMultiplier: 0.9,
-    touchMultiplier: 1.4,
+    duration:        1.25,
+    easing:          t => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+    orientation:     'vertical',
+    smoothWheel:     true,
+    wheelMultiplier: 0.85,
+    touchMultiplier: 1.5,
   });
 
   lenis.on('scroll', ScrollTrigger.update);
-  gsap.ticker.add((time) => lenis.raf(time * 1000));
+  gsap.ticker.add(time => lenis.raf(time * 1000));
   gsap.ticker.lagSmoothing(0);
+
+  // Hide scroll hint once user starts scrolling
+  lenis.on('scroll', ({ scroll }) => {
+    if (!scrollHintGone && scroll > 50) {
+      scrollHintGone = true;
+      const hint = document.querySelector('.scroll-hint');
+      if (hint) gsap.to(hint, { opacity: 0, y: -8, duration: 0.5, ease: 'power2.in' });
+    }
+  });
 }
 
-/* ─────────────────────────────────────────────
-   MASTER TIMELINE SCRUBBER
-───────────────────────────────────────────── */
-function setupTimelineScrubber() {
+/* ═══════════════════════════════════════════════
+   MASTER SCRUBBER
+═══════════════════════════════════════════════ */
+let _prevProg = 0;
+let _vel      = 0;
+
+function setupScrubber() {
+  // Cache text overlay elements
+  CHAPTERS.forEach(ch => {
+    const el = document.querySelector(`#${ch.id} .scene-text`);
+    if (el) _textEls.set(ch.id, el);
+  });
+
   ScrollTrigger.create({
-    trigger: '#scroll-container',
-    start: 'top top',
-    end: 'bottom bottom',
-    scrub: true,
-    onUpdate: (self) => {
-      updateTimeline(self.progress);
+    trigger: $scrollBox,
+    start  : 'top top',
+    end    : 'bottom bottom',
+    scrub  : true,
+    onUpdate(self) {
+      _vel = Math.min(0.008, Math.abs(self.progress - _prevProg));
+      _prevProg = self.progress;
+      tick(self.progress);
     },
   });
 }
 
-function updateTimeline(progress) {
+/* ═══════════════════════════════════════════════
+   KEYBOARD NAVIGATION — arrow keys jump chapters
+═══════════════════════════════════════════════ */
+function setupKeyboard() {
+  let lastKey = 0;
+  window.addEventListener('keydown', e => {
+    if (!lenis) return;
+    const now = Date.now();
+    if (now - lastKey < 600) return; // debounce
+    lastKey = now;
+
+    const totalH = $scrollBox.scrollHeight || document.documentElement.scrollHeight;
+    const curProg = _prevProg;
+
+    let targetChIdx = -1;
+    if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+      // Jump to next chapter start
+      for (let i = 0; i < CHAPTERS.length; i++) {
+        if (CHAPTERS[i].start > curProg + 0.01) { targetChIdx = i; break; }
+      }
+    } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+      // Jump to previous chapter start
+      for (let i = CHAPTERS.length - 1; i >= 0; i--) {
+        if (CHAPTERS[i].start < curProg - 0.01) { targetChIdx = i; break; }
+      }
+    }
+
+    if (targetChIdx >= 0) {
+      e.preventDefault();
+      scrollToChapter(targetChIdx);
+    }
+  }, { passive: false });
+}
+
+function scrollToChapter(chIdx) {
+  if (!lenis || chIdx < 0 || chIdx >= CHAPTERS.length) return;
+  const ch = CHAPTERS[chIdx];
+  const totalScrollable = document.documentElement.scrollHeight - window.innerHeight;
+  const targetY = ch.start * totalScrollable;
+  lenis.scrollTo(targetY, { duration: 1.6, easing: t => Math.min(1, 1.001 - Math.pow(2, -10 * t)) });
+}
+
+/* ═══════════════════════════════════════════════
+   CHAPTER DOTS
+═══════════════════════════════════════════════ */
+function setupChapterDots() {
+  $chapterDots.forEach((dot, i) => {
+    dot.addEventListener('click', () => scrollToChapter(i));
+  });
+}
+
+function updateChapterDots(activeIdx) {
+  $chapterDots.forEach((dot, i) => {
+    dot.classList.toggle('active', i === activeIdx);
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   MAIN TICK
+═══════════════════════════════════════════════ */
+function tick(progress) {
   const p = Math.max(0, Math.min(1, progress));
 
-  // Update vertical amber progress line
-  if (progressLine) {
-    progressLine.style.height = `${p * 100}%`;
+  if ($progLine) $progLine.style.height = (p * 100) + '%';
+
+  // Find active chapter (scan from end for efficiency)
+  let ch = CHAPTERS[0], chIdx = 0;
+  for (let i = CHAPTERS.length - 1; i >= 0; i--) {
+    if (p >= CHAPTERS[i].start) { ch = CHAPTERS[i]; chIdx = i; break; }
   }
 
-  // 1. Identify active chapter
-  let activeChapter = CHAPTERS[0];
-  let activeIndex = 0;
+  const span  = ch.end - ch.start;
+  const localP = span > 0 ? Math.max(0, Math.min(1, (p - ch.start) / span)) : 0;
 
-  for (let i = 0; i < CHAPTERS.length; i++) {
-    if (p >= CHAPTERS[i].start && p <= CHAPTERS[i].end) {
-      activeChapter = CHAPTERS[i];
-      activeIndex = i;
-      break;
-    }
+  drawFrame(ch, chIdx, localP);
+  handleAudio(ch, localP);
+  updateText(ch, localP);
+  updateChapterDots(chIdx);
+
+  if (ch.id === 'scene-3' && localP >= 0.08 && !statsAnimated) {
+    statsAnimated = true;
+    countUp();
   }
-  if (p > CHAPTERS[CHAPTERS.length - 1].end) {
-    activeChapter = CHAPTERS[CHAPTERS.length - 1];
-    activeIndex = CHAPTERS.length - 1;
-  }
+  if (p < 0.25) statsAnimated = false;
 
-  const duration = activeChapter.end - activeChapter.start;
-  const localP = duration > 0 ? Math.max(0, Math.min(1, (p - activeChapter.start) / duration)) : 0;
-
-  // 2. Render Canvas Frames with Cross-fade Logic
-  renderChapterFrame(activeChapter, activeIndex, localP);
-
-  // 3. Audio Synchronization
-  syncAudio(activeChapter, localP);
-
-  // 4. Text Card Transitions
-  updateTextOverlays(activeChapter, activeIndex, localP);
-
-  // 5. Stat Counter Triggering
-  if (activeChapter.id === 'scene-3') {
-    if (localP >= 0.1 && !statsAnimated) {
-      statsAnimated = true;
-      animateStatCounters();
-    }
-  } else if (p < 0.2) {
-    // Reset counter if user scrolls back near top
-    statsAnimated = false;
+  if (localP > 0.65 && typeof ch.seq === 'number') {
+    loaderObj.preloadNeighbours(ch.seq);
   }
 }
 
-/* ─────────────────────────────────────────────
-   CANVAS FRAME RENDERING WITH CROSS-FADE
-───────────────────────────────────────────── */
-function renderChapterFrame(chapter, chapterIndex, localP) {
-  let currentBmp = null;
-  let nextBmp = null;
-  let crossAlpha = 0;
+/* ═══════════════════════════════════════════════
+   CANVAS FRAME RENDERING
+═══════════════════════════════════════════════ */
+function drawFrame(ch, chIdx, localP) {
+  let cur = null, nxt = null, alpha = 0;
 
-  if (chapter.seq === 'r') {
-    // REASSEMBLY: s3 reverse then s2 reverse
-    const s3Count = frameCounts[3] || 192;
-    const s2Count = frameCounts[2] || 192;
-
+  if (ch.seq === 'r') {
+    const s3 = frameCounts[3], s2 = frameCounts[2];
     if (localP < 0.5) {
-      // First half: s3 in reverse (s3Count down to 1)
-      const subP = localP / 0.5;
-      const fNum = Math.max(1, Math.min(s3Count, Math.round((1 - subP) * (s3Count - 1)) + 1));
-      currentBmp = progressiveLoader.getFrame(3, fNum);
-
-      // Cross-fade to s2 reverse near midpoint
-      if (subP > 0.9) {
-        crossAlpha = (subP - 0.9) / 0.1;
-        nextBmp = progressiveLoader.getFrame(2, s2Count);
-      }
+      const sp = localP / 0.5;
+      cur = loaderObj.getFrame(3, Math.max(1, Math.min(s3, Math.round((1 - sp) * (s3 - 1)) + 1)));
+      if (sp > 0.88) { alpha = (sp - 0.88) / 0.12; nxt = loaderObj.getFrame(2, s2); }
     } else {
-      // Second half: s2 in reverse (s2Count down to 1)
-      const subP = (localP - 0.5) / 0.5;
-      const fNum = Math.max(1, Math.min(s2Count, Math.round((1 - subP) * (s2Count - 1)) + 1));
-      currentBmp = progressiveLoader.getFrame(2, fNum);
-
-      // Cross-fade to s4 at end
-      if (subP > 0.9) {
-        crossAlpha = (subP - 0.9) / 0.1;
-        nextBmp = progressiveLoader.getFrame(4, 1);
+      const sp = (localP - 0.5) / 0.5;
+      cur = loaderObj.getFrame(2, Math.max(1, Math.min(s2, Math.round((1 - sp) * (s2 - 1)) + 1)));
+      if (sp > 0.88 && chIdx < CHAPTERS.length - 1) {
+        alpha = (sp - 0.88) / 0.12;
+        nxt   = loaderObj.getFrame(CHAPTERS[chIdx + 1].seq, 1);
       }
     }
   } else {
-    // STANDARD SEQUENCE (s1, s2, s3, s4, s5, s6, s7)
-    const seq = chapter.seq;
-    const count = frameCounts[seq] || 192;
-    const frameIdx = Math.max(1, Math.min(count, Math.round(localP * (count - 1)) + 1));
-    currentBmp = progressiveLoader.getFrame(seq, frameIdx);
+    const seq   = ch.seq;
+    const count = frameCounts[seq];
+    const f     = Math.max(1, Math.min(count, Math.round(localP * (count - 1)) + 1));
+    cur = loaderObj.getFrame(seq, f);
 
-    // Cross-fade 6 frames before chapter boundary
-    const fadeStart = 1 - CROSSFADE_FRAMES / count;
-    if (localP > fadeStart && chapterIndex < CHAPTERS.length - 1) {
-      crossAlpha = (localP - fadeStart) / (CROSSFADE_FRAMES / count);
-      const nextChapter = CHAPTERS[chapterIndex + 1];
+    // Velocity-scaled crossfade (capped at 30 extra frames)
+    const fadeWidth = CROSSFADE_F + Math.round(_vel * 3000);
+    const fadeStart = 1 - fadeWidth / count;
 
-      if (nextChapter.seq === 'r') {
-        // Reassembly begins with s3's final frame
-        nextBmp = progressiveLoader.getFrame(3, frameCounts[3] || 192);
-      } else {
-        nextBmp = progressiveLoader.getFrame(nextChapter.seq, 1);
-      }
+    if (localP > fadeStart && chIdx < CHAPTERS.length - 1) {
+      alpha = Math.min(1, (localP - fadeStart) / (fadeWidth / count));
+      const nextCh = CHAPTERS[chIdx + 1];
+      const nxtSeq = nextCh.seq === 'r' ? 3 : nextCh.seq;
+      nxt = loaderObj.getFrame(nxtSeq, nextCh.seq === 'r' ? frameCounts[3] : 1);
     }
   }
 
-  renderer.setFrame(currentBmp, nextBmp, crossAlpha);
+  renderer.setFrame(cur, nxt, alpha);
 }
 
-/* ─────────────────────────────────────────────
-   AUDIO SYNCHRONIZATION
-───────────────────────────────────────────── */
-function syncAudio(chapter, localP) {
-  switch (chapter.id) {
+/* ═══════════════════════════════════════════════
+   AUDIO — gated on chapter change
+═══════════════════════════════════════════════ */
+function handleAudio(ch, localP) {
+  const chId   = ch.id;
+  const changed = chId !== activeChapterId;
+  activeChapterId = chId;
+
+  switch (chId) {
     case 'scene-2':
-      // s2: teardown.mp3 synced to scroll
-      audio.playTrack('teardown', { loop: true, volume: 0.25 + 0.75 * localP });
-      audio.stopTrack('engine', 0.2);
-      audio.stopTrack('launch', 0.2);
+      if (changed) { audio.play('teardown', { loop: true, volume: 0.3 }); audio.stop('engine', 0.5); audio.stop('launch', 0.3); }
+      audio.setVolume('teardown', 0.25 + 0.7 * localP);
       break;
 
     case 'scene-3':
-      // s3: engine_dive.mp3 synced to scroll
-      audio.playTrack('engine', { loop: true, volume: 0.3 + 0.7 * localP });
-      audio.stopTrack('teardown', 0.2);
-      audio.stopTrack('launch', 0.2);
+      if (changed) { audio.play('engine', { loop: true, volume: 0.3 }); audio.stop('teardown', 0.6); audio.stop('launch', 0.3); }
+      audio.setVolume('engine', 0.3 + 0.65 * localP);
       break;
 
     case 'scene-r':
-      // Reassembly: audio muted or very low
-      audio.setVolume('teardown', 0.05);
-      audio.setVolume('engine', 0.05);
-      audio.stopTrack('launch', 0.2);
+      // Low ambient during reassembly — setVolume guards against non-playing tracks
+      audio.setVolume('teardown', 0.06, 0.4);
+      audio.setVolume('engine',   0.06, 0.4);
       break;
 
     case 'scene-7':
-      // s7: launch.mp3 with volume and playbackRate rising with scroll
-      audio.playTrack('launch', { loop: false, volume: Math.min(1.0, 0.2 + localP * 0.8) });
+      if (changed) { audio.play('launch', { loop: false, volume: 0.2 }); audio.stop('teardown', 0.4); audio.stop('engine', 0.4); }
       audio.setVolume('launch', Math.min(1.0, 0.2 + localP * 0.8));
-      audio.setPlaybackRate('launch', 0.8 + localP * 0.6);
-      audio.stopTrack('teardown', 0.2);
-      audio.stopTrack('engine', 0.2);
+      audio.setRate('launch', 0.8 + localP * 0.55);
       break;
 
     default:
-      // s1, s4, s5, s6: fade out ambient engine/teardown/launch
-      audio.stopTrack('teardown', 0.4);
-      audio.stopTrack('engine', 0.4);
-      audio.stopTrack('launch', 0.4);
+      if (changed) { audio.stop('teardown', 0.5); audio.stop('engine', 0.5); audio.stop('launch', 0.5); }
       break;
   }
 }
 
-/* ─────────────────────────────────────────────
-   TEXT OVERLAY OPACITY & TRANSFORMS
-───────────────────────────────────────────── */
-function updateTextOverlays(activeChapter, activeIndex, localP) {
+/* ═══════════════════════════════════════════════
+   TEXT OVERLAYS
+═══════════════════════════════════════════════ */
+function updateText(activeCh, localP) {
   CHAPTERS.forEach((ch, idx) => {
-    const el = document.querySelector(`#${ch.id} .scene-text`);
+    const el = _textEls.get(ch.id);
     if (!el) return;
 
-    if (ch.id === activeChapter.id) {
-      let opacity = 1;
-      let y = 0;
+    let opacity = 0, yPx = 0;
 
+    if (ch.id === activeCh.id) {
+      const fIn = 0.14, fOut = 0.86;
       if (idx === 0) {
-        // First scene starts fully visible, fades out near end
-        if (localP > 0.75) {
-          opacity = 1 - (localP - 0.75) / 0.25;
-          y = -24 * (1 - opacity);
-        }
+        opacity = localP > 0.80 ? 1 - (localP - 0.80) / 0.20 : 1;
       } else if (idx === CHAPTERS.length - 1) {
-        // Last scene fades in, stays visible for CTA
-        if (localP < 0.2) {
-          opacity = localP / 0.2;
-          y = 24 * (1 - opacity);
-        }
+        opacity = localP < fIn ? localP / fIn : 1;
+        yPx     = localP < fIn ? 28 * (1 - opacity) : 0;
       } else {
-        // Intermediate scenes fade in and fade out
-        if (localP < 0.15) {
-          opacity = localP / 0.15;
-          y = 24 * (1 - opacity);
-        } else if (localP > 0.85) {
-          opacity = 1 - (localP - 0.85) / 0.15;
-          y = -24 * (1 - opacity);
-        }
+        if (localP < fIn)        { opacity = localP / fIn;                    yPx =  28 * (1 - opacity); }
+        else if (localP > fOut)  { opacity = 1 - (localP - fOut) / (1 - fOut); yPx = -28 * (1 - opacity); }
+        else                     { opacity = 1; }
       }
-
-      const clampedOp = Math.max(0, Math.min(1, opacity));
-      el.style.opacity = clampedOp.toFixed(3);
-      el.style.setProperty('--y', `${y.toFixed(1)}px`);
-      el.style.pointerEvents = clampedOp > 0.6 ? 'auto' : 'none';
-    } else {
-      el.style.opacity = '0';
-      el.style.pointerEvents = 'none';
     }
+
+    const clamped = Math.max(0, Math.min(1, opacity));
+    el.style.opacity      = clamped.toFixed(3);
+    el.style.setProperty('--y', yPx.toFixed(1) + 'px');
+    el.style.pointerEvents= clamped > 0.5 ? 'auto' : 'none';
   });
 }
 
-/* ─────────────────────────────────────────────
-   STAT COUNTERS ANIMATION
-───────────────────────────────────────────── */
-function animateStatCounters() {
-  const statEls = document.querySelectorAll('.stat-num[data-target]');
-  statEls.forEach((el) => {
-    const target = parseFloat(el.dataset.target);
-    const suffix = el.dataset.suffix || '';
+/* ═══════════════════════════════════════════════
+   STAT COUNTERS
+═══════════════════════════════════════════════ */
+function countUp() {
+  document.querySelectorAll('.stat-num[data-target]').forEach(el => {
+    const target    = parseFloat(el.dataset.target);
+    const suffix    = el.dataset.suffix || '';
     const isDecimal = !!el.dataset.decimal;
-
-    gsap.to(
-      { val: 0 },
-      {
-        val: target,
-        duration: 1.6,
-        ease: 'power2.out',
-        onUpdate() {
-          const v = this.targets()[0].val;
-          el.textContent = isDecimal
-            ? (v / 10).toFixed(1) + suffix
-            : Math.round(v) + suffix;
-        },
-      }
-    );
+    const proxy = { val: 0 };
+    gsap.to(proxy, {
+      val: target, duration: 1.8, ease: 'power2.out',
+      onUpdate() {
+        el.textContent = isDecimal
+          ? (proxy.val / 10).toFixed(1) + suffix
+          : Math.round(proxy.val) + suffix;
+      },
+    });
   });
 }
 
-/* ─────────────────────────────────────────────
-   HEADER CONTROLS (I18N & SOUND)
-───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   CONTROLS
+═══════════════════════════════════════════════ */
 function setupControls(withSound) {
-  // Language toggle
-  if (btnLang) {
-    btnLang.addEventListener('click', () => {
-      const newLang = i18n.toggle();
-      if (langLabel) {
-        langLabel.textContent = newLang === 'en' ? 'AR' : 'EN';
-      }
+  setupChapterDots();
+
+  if ($btnLang) {
+    $btnLang.addEventListener('click', () => {
+      const lang = i18n.toggle();
+      if ($langLabel) $langLabel.textContent = lang === 'en' ? 'AR' : 'EN';
     });
   }
 
-  // Sound toggle button
-  if (btnMute) {
-    if (!withSound) {
-      btnMute.style.opacity = '0.35';
-    }
-
-    btnMute.addEventListener('click', () => {
-      const isMuted = audio.toggleMute();
+  if ($btnMute) {
+    if (!withSound) $btnMute.style.opacity = '0.35';
+    $btnMute.addEventListener('click', () => {
+      const muted = audio.toggleMute();
       const waves = document.getElementById('sound-waves');
-      if (waves) {
-        waves.style.opacity = isMuted ? '0.2' : '1.0';
-      }
-      btnMute.style.opacity = isMuted ? '0.45' : '1.0';
+      if (waves) waves.style.opacity = muted ? '0.15' : '1';
+      $btnMute.style.opacity = muted ? '0.4' : '1';
     });
   }
 }
 
-/* ─────────────────────────────────────────────
-   BOOTSTRAP & EVENT LISTENERS
-───────────────────────────────────────────── */
-window.addEventListener('DOMContentLoaded', () => {
-  document.body.style.overflow = 'hidden';
-  init().catch(console.error);
-});
-
-// Handle viewport resize: switch between mobile and desktop assets if threshold crossed
+/* ═══════════════════════════════════════════════
+   RESIZE
+═══════════════════════════════════════════════ */
 window.addEventListener('resize', () => {
-  const nowMobile = window.innerWidth < MOBILE_BREAKPOINT;
-  if (nowMobile !== isMobile) {
-    isMobile = nowMobile;
-    if (progressiveLoader) {
-      progressiveLoader.mobile = isMobile;
-      progressiveLoader.cache = {}; // Invalidate old bitmaps
-      progressiveLoader.loadSection(1).catch(() => {});
-    }
+  const mobile = window.innerWidth < MOBILE_BP;
+  if (mobile !== isMobile && loaderObj) {
+    isMobile = mobile;
+    loaderObj.mobile = mobile;
+    for (let s = 1; s <= 7; s++) loaderObj.invalidateSection(s);
+    _bgLoad();
   }
-});
+}, { passive: true });

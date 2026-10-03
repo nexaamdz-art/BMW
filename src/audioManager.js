@@ -1,148 +1,168 @@
 /**
- * audioManager.js
- * Web Audio API manager for BMW M4 cinematic audio experience.
- * Initialized strictly after user gesture to comply with autoplay policy.
+ * audioManager.js — BMW M4 Experience
+ *
+ * Responsibilities:
+ *  - Initialize Web Audio API strictly after user gesture
+ *  - Load and decode audio buffers
+ *  - Smooth volume ramps (no zipper noise)
+ *  - playbackRate modulation for launch section
+ *  - Mute/unmute master gain
+ *  - Chapter-transition-aware: only stop/start on chapter change, not every scroll tick
  */
 
 export class AudioManager {
   constructor() {
-    this.ctx = null;
-    this.tracks = {}; // { id: { buffer, gainNode, sourceNode, isPlaying, loop } }
-    this.masterGain = null;
-    this.muted = false;
-    this.enabled = false;
+    this.ctx        = null;
+    this.master     = null;         // master gain node
+    this.tracks     = {};           // { id: { buffer, source, gain, playing } }
+    this.muted      = false;
+    this.enabled    = false;
+
+    // Track the last chapter to avoid redundant stop/start calls
+    this._activeChapter = null;
   }
 
+  /* ---- Init (must be called inside a user gesture handler) ---- */
   async init(withSound) {
     this.enabled = withSound;
     if (!withSound) return;
 
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AudioCtx();
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 1.0;
-      this.masterGain.connect(this.ctx.destination);
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this.ctx  = new Ctx();
+      this.master = this.ctx.createGain();
+      this.master.gain.setValueAtTime(1, this.ctx.currentTime);
+      this.master.connect(this.ctx.destination);
 
-      if (this.ctx.state === 'suspended') {
-        await this.ctx.resume();
-      }
+      if (this.ctx.state === 'suspended') await this.ctx.resume();
     } catch (e) {
-      console.warn('Web Audio initialization failed:', e);
+      console.warn('[Audio] Init failed:', e);
       this.enabled = false;
     }
   }
 
+  /* ---- Load ---- */
   async loadTrack(id, url) {
     if (!this.enabled || !this.ctx) return;
     try {
-      const res = await fetch(url);
-      const arrayBuffer = await res.arrayBuffer();
-      const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
-      this.tracks[id] = {
-        buffer: audioBuffer,
-        gainNode: null,
-        sourceNode: null,
-        isPlaying: false,
-      };
+      const buf = await (await fetch(url)).arrayBuffer();
+      const decoded = await this.ctx.decodeAudioData(buf);
+      this.tracks[id] = { buffer: decoded, source: null, gain: null, playing: false };
     } catch (e) {
-      console.warn(`Failed to load audio track [${id}] from ${url}:`, e);
+      console.warn(`[Audio] Failed to load "${id}" from ${url}:`, e);
     }
   }
 
-  playTrack(id, { loop = true, volume = 1.0 } = {}) {
+  /* ---- Playback ---- */
+  /**
+   * Start a track if not already playing.
+   * If already playing, smoothly ramp to the target volume.
+   */
+  play(id, { loop = true, volume = 0.8 } = {}) {
     if (!this.enabled || !this.ctx || !this.tracks[id]) return;
-    const track = this.tracks[id];
+    const t = this.tracks[id];
 
-    if (track.isPlaying) {
-      // Just adjust volume smoothly if already playing
-      this.setVolume(id, volume);
+    if (t.playing) {
+      // Just update volume — don't restart
+      this._rampGain(t.gain, volume);
       return;
     }
 
-    try {
-      const gainNode = this.ctx.createGain();
-      gainNode.gain.setValueAtTime(this.muted ? 0 : Math.max(0, volume), this.ctx.currentTime);
-      gainNode.connect(this.masterGain);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(this.muted ? 0 : 0.0001, this.ctx.currentTime); // fade in from silence
+    gain.connect(this.master);
 
-      const sourceNode = this.ctx.createBufferSource();
-      sourceNode.buffer = track.buffer;
-      sourceNode.loop = loop;
-      sourceNode.connect(gainNode);
-      sourceNode.start(0);
+    const src = this.ctx.createBufferSource();
+    src.buffer    = t.buffer;
+    src.loop      = loop;
+    src.connect(gain);
+    src.start(0);
+    src.onended   = () => { t.playing = false; };
 
-      sourceNode.onended = () => {
-        track.isPlaying = false;
-      };
+    // Fade in
+    this._rampGain(gain, volume, 0.4);
 
-      track.gainNode = gainNode;
-      track.sourceNode = sourceNode;
-      track.isPlaying = true;
-    } catch (e) {
-      console.warn(`Error playing track [${id}]:`, e);
-    }
+    t.source  = src;
+    t.gain    = gain;
+    t.playing = true;
   }
 
-  stopTrack(id, fadeDuration = 0.3) {
-    const track = this.tracks[id];
-    if (!track || !track.isPlaying) return;
+  /**
+   * Stop a track with a fade-out. Disconnects nodes to prevent AudioContext graph leaks.
+   */
+  stop(id, fadeTime = 0.5) {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.tracks[id];
+    if (!t || !t.playing) return;
 
-    if (fadeDuration > 0 && track.gainNode && this.ctx) {
+    // Mark not playing immediately so no new ramps are applied during fade
+    t.playing = false;
+
+    const gain = t.gain;
+    const src  = t.source;
+    // Null out track references so future setVolume calls skip this track
+    t.gain   = null;
+    t.source = null;
+
+    if (gain && fadeTime > 0) {
       const now = this.ctx.currentTime;
-      track.gainNode.gain.cancelScheduledValues(now);
-      track.gainNode.gain.setValueAtTime(track.gainNode.gain.value, now);
-      track.gainNode.gain.linearRampToValueAtTime(0, now + fadeDuration);
-
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0, now + fadeTime);
       setTimeout(() => {
-        try {
-          if (track.sourceNode) {
-            track.sourceNode.stop();
-            track.sourceNode.disconnect();
-          }
-        } catch {}
-        track.isPlaying = false;
-      }, fadeDuration * 1000 + 50);
+        try { src.stop(); } catch {}
+        try { src.disconnect(); } catch {}
+        try { gain.disconnect(); } catch {}
+      }, (fadeTime * 1000) + 60);
     } else {
-      try {
-        if (track.sourceNode) {
-          track.sourceNode.stop();
-          track.sourceNode.disconnect();
-        }
-      } catch {}
-      track.isPlaying = false;
+      try { src.stop(); } catch {}
+      try { src.disconnect(); } catch {}
+      try { gain.disconnect(); } catch {}
     }
   }
 
-  setVolume(id, volume, rampTime = 0.08) {
-    const track = this.tracks[id];
-    if (!track || !track.gainNode || !this.ctx) return;
-
-    const target = this.muted ? 0 : Math.max(0, Math.min(1.5, volume));
-    const now = this.ctx.currentTime;
-    track.gainNode.gain.cancelScheduledValues(now);
-    track.gainNode.gain.setValueAtTime(track.gainNode.gain.value, now);
-    track.gainNode.gain.linearRampToValueAtTime(target, now + rampTime);
+  /** Ramp track volume to target — only if track is currently playing */
+  setVolume(id, volume, rampTime = 0.1) {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.tracks[id];
+    if (!t || !t.playing || !t.gain) return;   // ← guard: skip stopped tracks
+    this._rampGain(t.gain, volume, rampTime);
   }
 
-  setPlaybackRate(id, rate) {
-    const track = this.tracks[id];
-    if (!track || !track.sourceNode || !this.ctx) return;
+  /** Set playbackRate (clamped 0.2–3) */
+  setRate(id, rate) {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.tracks[id];
+    if (!t || !t.playing || !t.source) return;
     try {
-      track.sourceNode.playbackRate.setValueAtTime(
+      t.source.playbackRate.setTargetAtTime(
         Math.max(0.2, Math.min(3.0, rate)),
-        this.ctx.currentTime
+        this.ctx.currentTime,
+        0.05
       );
     } catch {}
   }
 
+  isPlaying(id) { return this.tracks[id]?.playing ?? false; }
+
   toggleMute() {
     this.muted = !this.muted;
-    if (this.masterGain && this.ctx) {
+    if (this.master && this.ctx) {
       const now = this.ctx.currentTime;
-      this.masterGain.gain.cancelScheduledValues(now);
-      this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
-      this.masterGain.gain.linearRampToValueAtTime(this.muted ? 0 : 1.0, now + 0.15);
+      this.master.gain.cancelScheduledValues(now);
+      this.master.gain.setValueAtTime(this.master.gain.value, now);
+      this.master.gain.linearRampToValueAtTime(this.muted ? 0 : 1, now + 0.15);
     }
     return this.muted;
+  }
+
+  /* ---- Internal ---- */
+  _rampGain(gainNode, target, time = 0.12) {
+    if (!gainNode || !this.ctx) return;
+    const clamped = this.muted ? 0 : Math.max(0, Math.min(1.5, target));
+    const now = this.ctx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+    gainNode.gain.linearRampToValueAtTime(clamped, now + time);
   }
 }
