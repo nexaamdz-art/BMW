@@ -20,19 +20,19 @@ gsap.registerPlugin(ScrollTrigger);
 /* ═══════════════════════════════════════════════
    TIMELINE CONFIG
 ═══════════════════════════════════════════════ */
-const TOTAL_VH    = 900;
+const TOTAL_VH    = 1050;
 const CROSSFADE_F = 6;
 const MOBILE_BP   = 768;
 
 const CHAPTERS = [
-  { id: 'scene-1', seq: 1, start: 0.000, end: 0.125 },
-  { id: 'scene-2', seq: 2, start: 0.125, end: 0.250 },
-  { id: 'scene-3', seq: 3, start: 0.250, end: 0.375 },
-  { id: 'scene-r', seq: 'r', start: 0.375, end: 0.520 },
-  { id: 'scene-4', seq: 4, start: 0.520, end: 0.640 },
-  { id: 'scene-5', seq: 5, start: 0.640, end: 0.760 },
-  { id: 'scene-6', seq: 6, start: 0.760, end: 0.880 },
-  { id: 'scene-7', seq: 7, start: 0.880, end: 1.000 },
+  { id: 'scene-1', seq: 1, start: 0.000, end: 0.120 },
+  { id: 'scene-2', seq: 2, start: 0.120, end: 0.240 },
+  { id: 'scene-3', seq: 3, start: 0.240, end: 0.360 },
+  { id: 'scene-r', seq: 'r', start: 0.360, end: 0.490 },
+  { id: 'scene-4', seq: 4, start: 0.490, end: 0.610 },
+  { id: 'scene-5', seq: 5, start: 0.610, end: 0.730 },
+  { id: 'scene-6', seq: 6, start: 0.730, end: 0.840 },
+  { id: 'scene-7', seq: 7, start: 0.840, end: 1.000 },
 ];
 
 /* ═══════════════════════════════════════════════
@@ -45,6 +45,12 @@ let activeChapterId = null;
 let statsAnimated   = false;
 let entryDone       = false;
 let scrollHintGone  = false;
+
+// Launch animation state
+let isLaunching       = false;
+let launchRaf         = null;
+let _lastScene7Frame  = 1;
+let scene7AutoPlayed   = false;
 
 /* ═══════════════════════════════════════════════
    DOM REFS
@@ -79,44 +85,36 @@ window.addEventListener('DOMContentLoaded', () => {
 async function boot() {
   isMobile = window.innerWidth < MOBILE_BP;
 
-  $loaderLbl.textContent = 'Analyzing frames…';
+  $loaderLbl.textContent = 'Loading experience…';
   frameCounts = await detectRealFrameCounts(isMobile);
 
   loaderObj = new ProgressiveLoader(frameCounts, isMobile);
   audio     = new AudioManager();
   i18n      = new I18n();
 
-  // Load s1 (first scene) + s7 (last scene) in PARALLEL during the loader.
-  // s7 is guaranteed to be 100% in cache before the experience starts.
-  // Since they run simultaneously, load time ≈ max(s1_time, s7_time) — no penalty.
-  $loaderLbl.textContent = 'Loading experience…';
   let loaded = 0;
   const s1Total = frameCounts[1] || 192;
-  const s7Total = frameCounts[7] || 192;
-  const loaderTotal = s1Total + s7Total;   // ~384 frames total
 
   const onLoad = () => {
     loaded++;
-    const pct = Math.min(100, Math.round(loaded / loaderTotal * 100));
+    const pct = Math.min(100, Math.round((loaded / s1Total) * 100));
     $loaderBar.style.width = pct + '%';
     $loaderPct.textContent = pct + '%';
   };
 
-  await Promise.all([
-    loaderObj.loadSection(1, onLoad, 12),
-    loaderObj.loadSection(7, onLoad, 12),
-  ]);
+  // 1. Load full Scene 1 so opening scene is 100% ready
+  await loaderObj.loadSection(1, onLoad, 16);
+
+  // 2. Preload boundary anchors + keyframes across ALL scenes 1–7
+  $loaderLbl.textContent = 'Preparing experience…';
+  await loaderObj.preloadAnchorFrames();
+  await loaderObj.preloadAllKeyframes(8, 20); // dense keyframe coverage for ALL scenes 1..7!
 
   // Show first frame — canvas is already visible behind loader
   const f1 = loaderObj.getFrame(1, 1, true);
   if (f1) renderer.setFrame(f1);
 
-  // Preload anchor frames + stride-8 keyframes for all remaining scenes (2–6)
-  $loaderLbl.textContent = 'Preparing scenes…';
-  await loaderObj.preloadAnchorFrames();
-  await loaderObj.preloadAllKeyframes(8, 20);   // ~100 frames for scenes 2-6
-
-  // Background load scenes 2–6 in full
+  // Background load all scenes progressively in priority presentation order
   _bgLoad();
 
   // Reveal experience
@@ -126,15 +124,12 @@ async function boot() {
   enterExperience();
 }
 
-
-
 async function _bgLoad() {
-  // s1 and s7 are already fully loaded during boot (inside the loader bar).
-  // stride-8 keyframes for s2-s6 already loaded synchronously before enterExperience().
-  // Now fill all remaining frames for scenes 2-6.
-  for (const seq of [2, 3, 4, 5, 6]) {
+  // Load remaining frames in strategic order:
+  // Immediate next scenes (2 & 3), then finale (7), then scenes 4, 5, 6
+  for (const seq of [2, 3, 7, 4, 5, 6]) {
     await loaderObj.loadSection(seq, null, 16);
-    await new Promise(r => setTimeout(r, 8));
+    await new Promise(r => setTimeout(r, 10));
   }
 }
 
@@ -303,7 +298,24 @@ function scrollToChapter(chIdx) {
 ═══════════════════════════════════════════════ */
 function setupChapterDots() {
   $chapterDots.forEach((dot, i) => {
-    dot.addEventListener('click', () => scrollToChapter(i));
+    // Proactively preload target sequence keyframes on hover
+    dot.addEventListener('mouseenter', () => {
+      const ch = CHAPTERS[i];
+      if (ch && typeof ch.seq === 'number') {
+        loaderObj.preloadSectionKeyframes(ch.seq, 4).catch(() => {});
+      } else if (ch && ch.seq === 'r') {
+        loaderObj.preloadSectionKeyframes(2, 4).catch(() => {});
+        loaderObj.preloadSectionKeyframes(3, 4).catch(() => {});
+      }
+    });
+
+    dot.addEventListener('click', () => {
+      const ch = CHAPTERS[i];
+      if (ch && typeof ch.seq === 'number') {
+        loaderObj.preloadSectionKeyframes(ch.seq, 4).catch(() => {});
+      }
+      scrollToChapter(i);
+    });
   });
 }
 
@@ -314,9 +326,71 @@ function updateChapterDots(activeIdx) {
 }
 
 /* ═══════════════════════════════════════════════
+   SCENE 7 LAUNCH ANIMATION CONTROLLER
+═══════════════════════════════════════════════ */
+export function playLaunchAnimation(fromStart = false) {
+  if (isLaunching) {
+    cancelAnimationFrame(launchRaf);
+    isLaunching = false;
+  }
+
+  isLaunching = true;
+
+  if (audio) {
+    audio.play('launch', { loop: false, volume: 0.95 });
+    audio.stop('teardown', 0.3);
+    audio.stop('engine', 0.3);
+  }
+
+  const totalFrames = frameCounts[7] || 192;
+  let currentF = fromStart ? 1 : (_lastScene7Frame || 1);
+  if (currentF >= totalFrames - 2) currentF = 1;
+
+  let lastTime = performance.now();
+  const fps = 32; // ~6 seconds for 192 frames, perfectly timed with engine acceleration sound
+  const frameInterval = 1000 / fps;
+
+  function step(now) {
+    if (!isLaunching) return;
+
+    const elapsed = now - lastTime;
+    if (elapsed >= frameInterval) {
+      const advance = Math.max(1, Math.floor(elapsed / frameInterval));
+      currentF = Math.min(totalFrames, currentF + advance);
+      lastTime = now - (elapsed % frameInterval);
+
+      _lastScene7Frame = currentF;
+      const bmp = loaderObj.getFrame(7, currentF, true);
+      if (bmp) {
+        renderer.setFrame(bmp);
+      } else {
+        loaderObj.loadFrame(7, currentF).then(b => {
+          if (b && isLaunching) renderer.setFrame(b);
+        }).catch(() => {});
+      }
+    }
+
+    if (currentF < totalFrames) {
+      launchRaf = requestAnimationFrame(step);
+    } else {
+      isLaunching = false;
+    }
+  }
+
+  cancelAnimationFrame(launchRaf);
+  launchRaf = requestAnimationFrame(step);
+}
+
+/* ═══════════════════════════════════════════════
    MAIN TICK
 ═══════════════════════════════════════════════ */
 function tick(progress) {
+  // Manual scroll takes immediate priority over auto-launch animation
+  if (isLaunching) {
+    isLaunching = false;
+    cancelAnimationFrame(launchRaf);
+  }
+
   const p = Math.max(0, Math.min(1, progress));
 
   if ($progLine) $progLine.style.height = (p * 100) + '%';
@@ -341,13 +415,26 @@ function tick(progress) {
   }
   if (p < 0.25) statsAnimated = false;
 
+  // Auto-launch trigger when entering Scene 7
+  if (ch.id === 'scene-7') {
+    if (!scene7AutoPlayed) {
+      scene7AutoPlayed = true;
+      setTimeout(() => {
+        if (activeChapterId === 'scene-7' && !isLaunching) {
+          playLaunchAnimation(false);
+        }
+      }, 450);
+    }
+  } else if (p < 0.70) {
+    scene7AutoPlayed = false;
+  }
+
   if (localP > 0.5) {
     if (ch.seq === 'r') {
       loaderObj.loadSection(2, null, 12).catch(() => {});
       loaderObj.loadSection(4, null, 12).catch(() => {});
     } else if (typeof ch.seq === 'number') {
       loaderObj.preloadNeighbours(ch.seq);
-      // Extra: when in scene-6, guarantee s7 is loading at high priority
       if (ch.seq === 6) {
         loaderObj.loadSection(7, null, 24).catch(() => {});
       }
@@ -371,6 +458,15 @@ function drawFrame(ch, chIdx, localP) {
       const f = Math.max(1, Math.min(s3, Math.round((1 - sp) * (s3 - 1)) + 1));
       cur = loaderObj.getFrame(3, f, true);
 
+      // On-demand fetch + neighbor prefetch for Scene 3
+      if (!loaderObj.cache[3]?.[f]) {
+        loaderObj.loadFrame(3, f).then(bmp => {
+          if (bmp && activeChapterId === ch.id) renderer.setFrame(bmp);
+        }).catch(() => {});
+      }
+      if (f > 1 && !loaderObj.cache[3]?.[f - 1]) loaderObj.loadFrame(3, f - 1).catch(() => {});
+      if (f < s3 && !loaderObj.cache[3]?.[f + 1]) loaderObj.loadFrame(3, f + 1).catch(() => {});
+
       // Smooth dissolve into s2 frame 192 near midpoint (sp > 0.85)
       if (sp > 0.85) {
         alpha = (sp - 0.85) / 0.15;
@@ -381,6 +477,15 @@ function drawFrame(ch, chIdx, localP) {
       const sp = (localP - 0.5) / 0.5;
       const f = Math.max(1, Math.min(s2, Math.round((1 - sp) * (s2 - 1)) + 1));
       cur = loaderObj.getFrame(2, f, true);
+
+      // On-demand fetch + neighbor prefetch for Scene 2
+      if (!loaderObj.cache[2]?.[f]) {
+        loaderObj.loadFrame(2, f).then(bmp => {
+          if (bmp && activeChapterId === ch.id) renderer.setFrame(bmp);
+        }).catch(() => {});
+      }
+      if (f > 1 && !loaderObj.cache[2]?.[f - 1]) loaderObj.loadFrame(2, f - 1).catch(() => {});
+      if (f < s2 && !loaderObj.cache[2]?.[f + 1]) loaderObj.loadFrame(2, f + 1).catch(() => {});
 
       // Smooth dissolve into s4 frame 1 at the end of reassembly (sp > 0.85)
       if (sp > 0.85 && chIdx < CHAPTERS.length - 1) {
@@ -394,11 +499,33 @@ function drawFrame(ch, chIdx, localP) {
     const f = Math.max(1, Math.min(count, Math.round(localP * (count - 1)) + 1));
     cur = loaderObj.getFrame(seq, f, true);
 
+    if (seq === 7) {
+      _lastScene7Frame = f;
+    }
+
+    // Universal on-demand fetch for ALL sequences (1, 2, 3, 4, 5, 6, 7)
+    if (!loaderObj.cache[seq]?.[f]) {
+      loaderObj.loadFrame(seq, f).then(bmp => {
+        if (bmp && !isLaunching && activeChapterId === ch.id) {
+          renderer.setFrame(bmp);
+        }
+      }).catch(() => {});
+    }
+
+    // Proactive lookahead prefetching in scrub directions
+    if (f + 1 <= count && !loaderObj.cache[seq]?.[f + 1]) {
+      loaderObj.loadFrame(seq, f + 1).catch(() => {});
+    }
+    if (f + 2 <= count && !loaderObj.cache[seq]?.[f + 2]) {
+      loaderObj.loadFrame(seq, f + 2).catch(() => {});
+    }
+    if (f - 1 >= 1 && !loaderObj.cache[seq]?.[f - 1]) {
+      loaderObj.loadFrame(seq, f - 1).catch(() => {});
+    }
+
     // Transitions between sequences:
     const nextCh = CHAPTERS[chIdx + 1];
     if (nextCh) {
-      // NOTE: Scene 3 ends at s3 frame 192, and Scene R begins at s3 frame 192 in reverse.
-      // This is a continuous sequence reversal — NO CROSSFADE to avoid double-image ghosting!
       if (nextCh.seq !== 'r') {
         const crossFrames = 10 + Math.round(_vel * 1500);
         const fadeStart = 1 - (crossFrames / count);
@@ -455,21 +582,23 @@ function handleAudio(ch, localP) {
    TEXT OVERLAYS
 ═══════════════════════════════════════════════ */
 function updateText(activeCh, localP) {
+  const isRtl = document.documentElement.getAttribute('dir') === 'rtl' ||
+                document.body.getAttribute('dir') === 'rtl';
+
   CHAPTERS.forEach((ch, idx) => {
     const el = _textEls.get(ch.id);
     if (!el) return;
 
-    let opacity = 0, xPx = 0, yPx = 0;
+    let opacity = 0;
 
     if (ch.id === activeCh.id) {
-      const fIn = 0.14, fOut = 0.86;
+      const fIn = 0.12, fOut = 0.88;
       if (idx === 0) {
         // Scene 1: fade in immediately, fade out near end
         opacity = localP > 0.80 ? 1 - (localP - 0.80) / 0.20 : 1;
       } else if (idx === CHAPTERS.length - 1) {
-        // Last scene: fade in from below
+        // Last scene: fade in and hold
         opacity = localP < fIn ? localP / fIn : 1;
-        yPx     = localP < fIn ? 28 * (1 - opacity) : 0;
       } else {
         if (localP < fIn)        { opacity = localP / fIn; }
         else if (localP > fOut)  { opacity = 1 - (localP - fOut) / (1 - fOut); }
@@ -479,26 +608,26 @@ function updateText(activeCh, localP) {
 
     const clamped = Math.max(0, Math.min(1, opacity));
 
-    // Horizontal slide for left/right cards; vertical for center/last
+    // Horizontal slide ONLY — all text cards enter from the sides (never from top or bottom)
     const isLeft  = el.classList.contains('left-text');
     const isRight = el.classList.contains('right-text');
 
-    if (isLeft) {
-      // Slide in from the left (enters from off-screen left)
-      xPx = clamped < 1 ? -60 * (1 - clamped) : 0;
-      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
-      el.style.removeProperty('--y');
-    } else if (isRight) {
-      // Slide in from the right (enters from off-screen right)
-      xPx = clamped < 1 ? 60 * (1 - clamped) : 0;
-      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
-      el.style.removeProperty('--y');
-    } else {
-      // Center text: vertical slide (up)
-      el.style.setProperty('--y', yPx.toFixed(1) + 'px');
-      el.style.removeProperty('--x');
+    let xPx = 0;
+    if (clamped < 1) {
+      const dist = 75 * (1 - clamped);
+      if (isLeft) {
+        xPx = isRtl ? dist : -dist;
+      } else if (isRight) {
+        xPx = isRtl ? -dist : dist;
+      } else {
+        // Center text (Scene 1, Scene R, Scene 7) — enters smoothly from side
+        const dir = (idx % 2 === 0) ? -1 : 1;
+        xPx = dir * dist * (isRtl ? -1 : 1);
+      }
     }
 
+    el.style.setProperty('--x', xPx.toFixed(1) + 'px');
+    el.style.removeProperty('--y');
     el.style.opacity       = clamped.toFixed(3);
     el.style.pointerEvents = clamped > 0.5 ? 'auto' : 'none';
   });
@@ -543,6 +672,15 @@ function setupControls() {
       const waves = document.getElementById('sound-waves');
       if (waves) waves.style.opacity = muted ? '0.15' : '1';
       $btnMute.style.opacity = muted ? '0.4' : '1';
+    });
+  }
+
+  // Interactive Launch button in Scene 7
+  const btnLaunch = document.getElementById('btn-replay-launch');
+  if (btnLaunch) {
+    btnLaunch.addEventListener('click', (e) => {
+      e.preventDefault();
+      playLaunchAnimation(true);
     });
   }
 }

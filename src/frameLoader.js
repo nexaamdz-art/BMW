@@ -27,40 +27,14 @@ export function frameUrl(seq, frame, mobile = false) {
    AUTO-DETECTION OF REAL FRAME COUNTS
    Rejects Vite SPA HTML 200 fallbacks by inspecting content-type
 ───────────────────────────────────────────── */
+export const FRAME_COUNTS = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
+
+/* ─────────────────────────────────────────────
+   AUTHORITATIVE REAL FRAME COUNTS
+   Verified directly from public/frames directory
+───────────────────────────────────────────── */
 export async function detectRealFrameCounts(mobile = false) {
-  const CACHE_KEY = `bmw_m4_fc_${mobile ? 'm' : 'd'}_v6`;
-
-  // Verified frame counts from filesystem (authoritative)
-  const defaults = { 1: 192, 2: 192, 3: 192, 4: 240, 5: 240, 6: 240, 7: 192 };
-
-  // Return cached counts if valid
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && [1, 2, 3, 4, 5, 6, 7].every(s => parsed[s] >= 100 && parsed[s] <= 300)) {
-        return parsed;
-      }
-    }
-  } catch { /* storage unavailable */ }
-
-  // Use defaults directly — counts are verified from filesystem
-  // Do a quick sanity check of s1 frame 1 to confirm server is up
-  try {
-    const r = await fetch(frameUrl(1, 1, mobile), { method: 'HEAD' });
-    const ct = r.headers.get('content-type') || '';
-    if (!r.ok || (!ct.includes('image') && !ct.includes('webp') && !ct.includes('octet-stream'))) {
-      // Server not serving frames properly — return defaults and don't cache
-      console.warn('[FrameLoader] Vite not serving frames as images. Using default counts.');
-      return { ...defaults };
-    }
-  } catch {
-    return { ...defaults };
-  }
-
-  // Server confirmed working — cache and return defaults
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify(defaults)); } catch {}
-  return { ...defaults };
+  return { ...FRAME_COUNTS };
 }
 
 
@@ -149,21 +123,37 @@ export class ProgressiveLoader {
   }
 
   /**
-   * Preload strided keyframes across scenes 2–6 in the background.
-   * (Scene 1 and scene 7 are fully loaded during the initial loader.)
+   * Preload strided keyframes across ALL scenes 1–7.
+   * Guarantees every sequence has immediate timeline coverage.
    */
-  async preloadAllKeyframes(stride = 8, concurrency = 16) {
+  async preloadAllKeyframes(stride = 8, concurrency = 20) {
     const tasks = [];
-    for (let s = 2; s <= 6; s++) {
+    for (let s = 1; s <= 7; s++) {
       const count = this.frameCounts[s] || 192;
       for (let f = 1; f <= count; f += stride) {
-        tasks.push({ s, f });
+        if (!this.cache[s]?.[f]) tasks.push({ s, f });
       }
+      if (!this.cache[s]?.[count]) tasks.push({ s, f: count });
     }
     for (let i = 0; i < tasks.length; i += concurrency) {
       const batch = tasks.slice(i, i + concurrency);
       await Promise.all(batch.map(t => this.loadFrame(t.s, t.f)));
     }
+  }
+
+  /**
+   * Fast keyframe preloader for a specific sequence (e.g. s7).
+   * Loads keyframes at a stride (e.g. 8) so the sequence has immediate full coverage.
+   */
+  async preloadSectionKeyframes(seq, stride = 8) {
+    const count = this.frameCounts[seq] || 192;
+    const tasks = [];
+    for (let f = 1; f <= count; f += stride) {
+      if (!this.cache[seq]?.[f]) tasks.push(f);
+    }
+    if (!this.cache[seq]?.[count]) tasks.push(count);
+
+    await Promise.all(tasks.map(f => this.loadFrame(seq, f)));
   }
 
   /**
@@ -184,24 +174,21 @@ export class ProgressiveLoader {
       return seqCache[frameNum];
     }
 
-    // 2. Nearest-neighbour search within the SAME sequence
+    // 2. Nearest-neighbour search within the SAME sequence:
+    // If sequence has ANY loaded frames, pick the closest one so it NEVER cross-pollutes with another sequence
     if (seqCache) {
-      const maxDelta = 60;
-      for (let d = 1; d <= maxDelta; d++) {
-        if (seqCache[frameNum - d]) {
-          this._lastBitmap = seqCache[frameNum - d];
-          return seqCache[frameNum - d];
-        }
-        if (seqCache[frameNum + d]) {
-          this._lastBitmap = seqCache[frameNum + d];
-          return seqCache[frameNum + d];
-        }
-      }
-
-      // Any available frame in this sequence
-      const keys = Object.keys(seqCache);
+      const keys = Object.keys(seqCache).map(Number);
       if (keys.length > 0) {
-        const b = seqCache[keys[0]];
+        let closest = keys[0];
+        let minDiff = Math.abs(closest - frameNum);
+        for (let i = 1; i < keys.length; i++) {
+          const diff = Math.abs(keys[i] - frameNum);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = keys[i];
+          }
+        }
+        const b = seqCache[closest];
         this._lastBitmap = b;
         return b;
       }
