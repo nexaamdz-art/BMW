@@ -268,8 +268,6 @@ body[dir="rtl"] { font-family: var(--font-ar); }
   user-select:   none;
   opacity:       0;
   pointer-events:none;
-  /* Smooth opacity/translate — JS drives --y (vertical) or --x (horizontal) */
-  transition:    opacity .18s ease-out, transform .18s ease-out;
   will-change:   opacity, transform;
 }
 
@@ -277,7 +275,7 @@ body[dir="rtl"] { font-family: var(--font-ar); }
 .center-text {
   top:       50%;
   left:      50%;
-  transform: translate(calc(-50% + var(--x, 0px)), -50%);
+  transform: translate(-50%, -50%) translateY(var(--y, 0px)) scale(var(--scale, 1));
   text-align:center;
   width:     90vw;
   max-width: 820px;
@@ -288,7 +286,7 @@ body[dir="rtl"] { font-family: var(--font-ar); }
   top:       50%;
   left:      6vw;
   transform: translate(var(--x, 0px), -50%);
-  max-width: 450px;
+  max-width: 460px;
 }
 
 .right-text {
@@ -296,7 +294,7 @@ body[dir="rtl"] { font-family: var(--font-ar); }
   right:     6vw;
   left:      auto;
   transform: translate(var(--x, 0px), -50%);
-  max-width: 450px;
+  max-width: 460px;
 }
 
 /* RTL flip */
@@ -305,15 +303,15 @@ body[dir="rtl"] { font-family: var(--font-ar); }
 
 /* ── Glass Card ── */
 .glass-card {
-  background:          rgba(5,6,7,.68);
-  backdrop-filter:     blur(26px);
-  -webkit-backdrop-filter: blur(26px);
-  border:              1px solid rgba(255,255,255,.075);
-  padding:             36px 32px;
-  border-radius:       3px;
+  background:          rgba(5,6,7,.75);
+  backdrop-filter:     blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  border:              1px solid rgba(255,255,255,.09);
+  padding:             34px 30px;
+  border-radius:       4px;
   position:            relative;
   overflow:            hidden;
-  box-shadow:          0 24px 60px rgba(0,0,0,.65);
+  box-shadow:          0 20px 50px rgba(0,0,0,.75), inset 0 1px 0 rgba(255,255,255,.08);
 }
 
 .card-accent {
@@ -470,60 +468,49 @@ body[dir="rtl"] { font-family: var(--font-ar); }
 }
 .cta-link:hover { color: var(--text); }
 
-/* ── Finale Card & Launch Trigger Button ── */
-.finale-card {
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-
-.launch-action-bar {
-  margin: 6px 0 14px;
-  display: flex;
-  justify-content: center;
-}
-
+/* ── Launch Trigger Button ── */
 .btn-launch-trigger {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 28px;
-  background: linear-gradient(135deg, rgba(255,194,26,0.22), rgba(255,140,0,0.14));
-  border: 1px solid rgba(255,194,26,0.65);
-  border-radius: 4px;
+  padding: 15px 30px;
+  background: rgba(255,194,26,0.12);
+  border: 1px solid rgba(255,194,26,0.6);
+  border-radius: 2px;
   color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-family: var(--font-title);
+  font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
-  box-shadow: 0 0 25px rgba(255,194,26,0.3);
+  box-shadow: 0 0 25px rgba(255,194,26,0.22);
   transition: all 0.25s var(--ease-expo);
   outline: none;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 .btn-launch-trigger:hover {
   background: var(--accent);
   color: #050607;
-  box-shadow: 0 0 40px rgba(255,194,26,0.75);
-  transform: scale(1.05);
+  border-color: var(--accent);
+  box-shadow: 0 10px 40px rgba(255,194,26,0.6);
+  transform: translateY(-2px);
 }
 
 .btn-launch-trigger:active {
-  transform: scale(0.97);
+  transform: translateY(0);
 }
 
 .launch-icon {
-  font-size: 1.1rem;
-  animation: pulse-icon 1.5s infinite;
+  font-size: 1rem;
+  animation: pulse-icon 1.6s infinite;
 }
 
 @keyframes pulse-icon {
-  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px var(--accent)); }
-  50% { transform: scale(1.25); filter: drop-shadow(0 0 10px #FF8C00); }
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 3px var(--accent)); }
+  50% { transform: scale(1.2); filter: drop-shadow(0 0 8px #FF8C00); }
 }
 
 /* ================================================================

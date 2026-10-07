@@ -401,6 +401,8 @@ function tick(progress) {
     if (p >= CHAPTERS[i].start) { ch = CHAPTERS[i]; chIdx = i; break; }
   }
 
+  activeChapterId = ch.id;
+
   const span  = ch.end - ch.start;
   const localP = span > 0 ? Math.max(0, Math.min(1, (p - ch.start) / span)) : 0;
 
@@ -412,8 +414,9 @@ function tick(progress) {
   if (ch.id === 'scene-3' && localP >= 0.08 && !statsAnimated) {
     statsAnimated = true;
     countUp();
+  } else if (ch.id !== 'scene-3') {
+    statsAnimated = false;
   }
-  if (p < 0.25) statsAnimated = false;
 
   // Auto-launch trigger when entering Scene 7
   if (ch.id === 'scene-7') {
@@ -589,47 +592,62 @@ function updateText(activeCh, localP) {
     const el = _textEls.get(ch.id);
     if (!el) return;
 
-    let opacity = 0;
+    let targetNorm = 0;
 
     if (ch.id === activeCh.id) {
-      const fIn = 0.12, fOut = 0.88;
       if (idx === 0) {
-        // Scene 1: fade in immediately, fade out near end
-        opacity = localP > 0.80 ? 1 - (localP - 0.80) / 0.20 : 1;
+        // Scene 1: fully visible at start, fades out gently near end
+        targetNorm = localP > 0.75 ? Math.max(0, 1 - (localP - 0.75) / 0.25) : 1;
       } else if (idx === CHAPTERS.length - 1) {
-        // Last scene: fade in and hold
-        opacity = localP < fIn ? localP / fIn : 1;
+        // Scene 7 (last scene): enters smoothly and stays
+        const fIn = 0.14;
+        targetNorm = localP < fIn ? localP / fIn : 1;
       } else {
-        if (localP < fIn)        { opacity = localP / fIn; }
-        else if (localP > fOut)  { opacity = 1 - (localP - fOut) / (1 - fOut); }
-        else                     { opacity = 1; }
+        const fIn = 0.12, fOut = 0.88;
+        if (localP < fIn) {
+          targetNorm = localP / fIn;
+        } else if (localP > fOut) {
+          targetNorm = (1 - localP) / (1 - fOut);
+        } else {
+          // 100% steady, motionless, clear and readable while scrubbing!
+          targetNorm = 1;
+        }
       }
     }
 
-    const clamped = Math.max(0, Math.min(1, opacity));
+    const clamped = Math.max(0, Math.min(1, targetNorm));
+    // Smooth cubic ease-out: 1 - (1 - t)^3
+    const eased = clamped === 1 ? 1 : 1 - Math.pow(1 - clamped, 3);
 
-    // Horizontal slide ONLY — all text cards enter from the sides (never from top or bottom)
     const isLeft  = el.classList.contains('left-text');
     const isRight = el.classList.contains('right-text');
 
-    let xPx = 0;
-    if (clamped < 1) {
-      const dist = 75 * (1 - clamped);
-      if (isLeft) {
-        xPx = isRtl ? dist : -dist;
-      } else if (isRight) {
-        xPx = isRtl ? -dist : dist;
-      } else {
-        // Center text (Scene 1, Scene R, Scene 7) — enters smoothly from side
-        const dir = (idx % 2 === 0) ? -1 : 1;
-        xPx = dir * dist * (isRtl ? -1 : 1);
-      }
+    if (isLeft) {
+      // Slides in gently from left: -32px to 0px
+      const dist = 32 * (1 - eased);
+      const xPx = isRtl ? dist : -dist;
+      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
+      el.style.removeProperty('--y');
+      el.style.removeProperty('--scale');
+    } else if (isRight) {
+      // Slides in gently from right: +32px to 0px
+      const dist = 32 * (1 - eased);
+      const xPx = isRtl ? -dist : dist;
+      el.style.setProperty('--x', xPx.toFixed(1) + 'px');
+      el.style.removeProperty('--y');
+      el.style.removeProperty('--scale');
+    } else {
+      // Center text (Scene 1, Scene R, Scene 7):
+      // Stays perfectly centered horizontally! Subtle vertical float & scale:
+      const yPx = 16 * (1 - eased);
+      const scale = 0.98 + 0.02 * eased;
+      el.style.setProperty('--y', yPx.toFixed(1) + 'px');
+      el.style.setProperty('--scale', scale.toFixed(3));
+      el.style.removeProperty('--x');
     }
 
-    el.style.setProperty('--x', xPx.toFixed(1) + 'px');
-    el.style.removeProperty('--y');
-    el.style.opacity       = clamped.toFixed(3);
-    el.style.pointerEvents = clamped > 0.5 ? 'auto' : 'none';
+    el.style.opacity       = eased.toFixed(3);
+    el.style.pointerEvents = eased > 0.5 ? 'auto' : 'none';
   });
 }
 
@@ -696,4 +714,6 @@ window.addEventListener('resize', () => {
     for (let s = 1; s <= 7; s++) loaderObj.invalidateSection(s);
     _bgLoad();
   }
+  _setSceneHeights();
+  ScrollTrigger.refresh();
 }, { passive: true });
